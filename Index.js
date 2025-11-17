@@ -3,7 +3,6 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
-  DisconnectReason,
   delay
 } = require("@whiskeysockets/baileys");
 
@@ -18,11 +17,12 @@ const rl = readline.createInterface({
 
 const ask = q => new Promise(res => rl.question(q, res));
 
-async function startBot() {
+async function iniciar() {
   console.clear();
   console.log(`
 =====================================================
  🔐 SISTEMA UNIVERSAL TOKITO-MD – BAILEYS LOGIN
+    MODO FORZADO: ANDROID TABLET COMPANION
 =====================================================
 [1] Escanear Código QR
 [2] Código de 8 dígitos (Pairing)
@@ -38,67 +38,57 @@ async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  // ============================
-  // CASO → CÓDIGO DE 8 DÍGITOS
-  // ============================
+  // ====================================================
+  // 🔥 FORZAR MODO ANDROID TABLET (ESTE ES EL TRUCO)
+  // ====================================================
+  const forcedBrowser = [
+    "WhatsApp",
+    "Android Tablet",
+    "2.23.18"
+  ];
+
+  // ====================================================
+  // CASO 1: PAIRING CODE
+  // ====================================================
   if (metodo === "2" && !state.creds.registered) {
     console.log("\n🔌 Generando pairing code...\n");
 
     const sock = makeWASocket({
       version,
       printQRInTerminal: false,
-      browser: ["Tokito-MD", "Dual", "1.0"],
+      browser: forcedBrowser,    // ← FUERZA MODO TABLET
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys)
-      }
+      },
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+      generateHighQualityLinkPreview: false
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    await delay(700); // necesario para evitar cierre instantáneo
 
-    sock.ev.on("connection.update", update => {
-      const { connection } = update;
-
-      if (connection === "open") {
-        console.log("✅ Conexión establecida, esperando registro...");
-      }
-
-      if (connection === "close") {
-        console.log("❌ Conexión cerrada.");
-        const shouldReconnect =
-          update.lastDisconnect?.error?.output?.statusCode !==
-          DisconnectReason.loggedOut;
-
-        if (shouldReconnect) {
-          console.log("🔄 Reintentando conexión...");
-          startBot();
-        } else {
-          console.log("⚠ Sesión inválida. Borrando archivos…");
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-        }
-      }
-    });
-
-    // ==== 🔥 GENERAR CÓDIGO DE EMPAREJAMIENTO ====
-    await delay(800);
     try {
       const code = await sock.requestPairingCode(numero);
-      console.log("\n👉 TU CÓDIGO DE 8 DÍGITOS:", code);
-      console.log("Insértalo en WhatsApp Business / Normal / Dual.\n");
-    } catch (e) {
-      console.log("❌ Error generando código:", e.message);
+      console.log("\n👉 TU CÓDIGO DE 8 DÍGITOS:");
+      console.log(code);
+      console.log("\n❗ Inserta el código en WhatsApp NORMAL o BUSINESS.\n");
+      console.log("Si antes te salía error → AHORA DEBE FUNCIONAR.");
+    } catch (err) {
+      console.log("❌ Error generando code:", err.message);
     }
 
+    sock.ev.on("creds.update", saveCreds);
     return;
   }
 
-  // ============================
-  // CASO → QR
-  // ============================
+  // ====================================================
+  // CASO 2: QR NORMAL
+  // ====================================================
   const sock = makeWASocket({
     version,
     printQRInTerminal: metodo === "1",
-    browser: ["Tokito-MD", "Dual", "1.0"],
+    browser: forcedBrowser,  // modo tablet aquí también
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys)
@@ -107,26 +97,14 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", update => {
-    const { connection, lastDisconnect } = update;
-
+  sock.ev.on("connection.update", ({ connection }) => {
     if (connection === "open") {
       console.log("✅ Conectado correctamente!");
     }
-
     if (connection === "close") {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log("❌ Conexión cerrada. Razón:", reason);
-
-      if (reason !== DisconnectReason.loggedOut) {
-        console.log("🔄 Reconectando...");
-        startBot();
-      } else {
-        console.log("⚠ Sesión inválida. Eliminando carpeta...");
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-      }
+      console.log("❌ Conexión cerrada.");
     }
   });
 }
 
-startBot();
+iniciar();
