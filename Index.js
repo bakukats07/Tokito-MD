@@ -3,6 +3,7 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
+  DisconnectReason,
   delay
 } = require("@whiskeysockets/baileys");
 
@@ -17,7 +18,7 @@ const rl = readline.createInterface({
 
 const ask = q => new Promise(res => rl.question(q, res));
 
-async function iniciar() {
+async function startBot() {
   console.clear();
   console.log(`
 =====================================================
@@ -38,12 +39,11 @@ async function iniciar() {
   const { version } = await fetchLatestBaileysVersion();
 
   // ============================
-  // CASO 1 → PAIRING CODE
+  // CASO → CÓDIGO DE 8 DÍGITOS
   // ============================
   if (metodo === "2" && !state.creds.registered) {
     console.log("\n🔌 Generando pairing code...\n");
 
-    // ⚠ Crear socket en modo HEADLESS especial
     const sock = makeWASocket({
       version,
       printQRInTerminal: false,
@@ -54,25 +54,46 @@ async function iniciar() {
       }
     });
 
-    // ⚠ Esperar a que esté listo antes de pedir el código
-    await delay(500);
+    sock.ev.on("creds.update", saveCreds);
 
+    sock.ev.on("connection.update", update => {
+      const { connection } = update;
+
+      if (connection === "open") {
+        console.log("✅ Conexión establecida, esperando registro...");
+      }
+
+      if (connection === "close") {
+        console.log("❌ Conexión cerrada.");
+        const shouldReconnect =
+          update.lastDisconnect?.error?.output?.statusCode !==
+          DisconnectReason.loggedOut;
+
+        if (shouldReconnect) {
+          console.log("🔄 Reintentando conexión...");
+          startBot();
+        } else {
+          console.log("⚠ Sesión inválida. Borrando archivos…");
+          fs.rmSync(sessionDir, { recursive: true, force: true });
+        }
+      }
+    });
+
+    // ==== 🔥 GENERAR CÓDIGO DE EMPAREJAMIENTO ====
+    await delay(800);
     try {
       const code = await sock.requestPairingCode(numero);
-      console.log("👉 TU CÓDIGO DE 8 DÍGITOS:", code);
-      console.log("\nInsértalo en WhatsApp Business / Normal / Dual.\n");
-
-    } catch (err) {
-      console.log("❌ Error generando código:", err.message);
+      console.log("\n👉 TU CÓDIGO DE 8 DÍGITOS:", code);
+      console.log("Insértalo en WhatsApp Business / Normal / Dual.\n");
+    } catch (e) {
+      console.log("❌ Error generando código:", e.message);
     }
-
-    sock.ev.on("creds.update", saveCreds);
 
     return;
   }
 
   // ============================
-  // CASO 2 → QR NORMAL
+  // CASO → QR
   // ============================
   const sock = makeWASocket({
     version,
@@ -86,10 +107,26 @@ async function iniciar() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", ({ connection }) => {
-    if (connection === "open") console.log("✅ Conectado!");
-    if (connection === "close") console.log("❌ Conexión cerrada.");
+  sock.ev.on("connection.update", update => {
+    const { connection, lastDisconnect } = update;
+
+    if (connection === "open") {
+      console.log("✅ Conectado correctamente!");
+    }
+
+    if (connection === "close") {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      console.log("❌ Conexión cerrada. Razón:", reason);
+
+      if (reason !== DisconnectReason.loggedOut) {
+        console.log("🔄 Reconectando...");
+        startBot();
+      } else {
+        console.log("⚠ Sesión inválida. Eliminando carpeta...");
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      }
+    }
   });
 }
 
-iniciar();
+startBot();
