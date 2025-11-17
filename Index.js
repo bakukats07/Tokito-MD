@@ -1,4 +1,3 @@
-const { Boom } = require("@hapi/boom");
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -10,53 +9,58 @@ const {
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+
+// Plugins
 const allfake = require("./lib/allfake.js");
 const plugins = require("./lib/loader.js");
 
+// Control de mensajes (ANTI-BAN)
+const MENSAJES_MAX_POR_MINUTO = 15; 
+let mensajesEnMinuto = 0;
+setInterval(() => mensajesEnMinuto = 0, 60 * 1000);
+
+// CLI
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-// ==============================
-// MENÚ DE AUTENTICACIÓN
-// ==============================
+function preguntar(texto) {
+    return new Promise(res => rl.question(texto, ans => res(ans.trim())));
+}
+
+// ==========================================================
+//  MENÚ DE AUTENTICACIÓN
+// ==========================================================
 async function menuAutenticacion() {
-    return new Promise(resolve => {
-        console.log(`
+    console.clear();
+    console.log(`
 =====================================================
-        SISTEMA DE AUTENTICACIÓN – BAILEYS BOT       
+ 🔐 SISTEMA UNIVERSAL DE CONEXIÓN – TOKITO-MD BOT 
+ Compatible con:
+ ✔ WhatsApp normal
+ ✔ WhatsApp Business
+ ✔ WhatsApp Dual / Clonado (Samsung/Xiaomi)
+ ✔ WhatsApp Business Dual
 =====================================================
 
-Elige un método de inicio:
+Elige tu método de conexión:
 
-[1] Código QR  
+[1] Escanear Código QR  
 [2] Código de 8 dígitos (Pairing Code)
 
 =====================================================
 `);
-        rl.question("Escribe 1 o 2: ", res => resolve(res.trim()));
-    });
+    return await preguntar("Escribe 1 o 2: ");
 }
 
-// ==============================
-// PREGUNTAR NÚMERO
-// ==============================
-async function pedirNumero() {
-    return new Promise(resolve => {
-        rl.question("\n🔢 Ingresa el número del bot (ej: 573001112233): ", res => {
-            resolve(res.trim());
-        });
-    });
-}
-
-// ==============================
-// INICIAR BOT
-// ==============================
+// ==========================================================
+//  PROCESO PRINCIPAL
+// ==========================================================
 async function iniciarBot() {
 
     const metodo = await menuAutenticacion();
-    const numero = await pedirNumero();
+    const numero = await preguntar("\n🔢 Ingresa el número del bot (Ej: 573001112233): ");
 
     const sessionPath = path.join(__dirname, "sessions", numero);
     fs.mkdirSync(sessionPath, { recursive: true });
@@ -64,24 +68,23 @@ async function iniciarBot() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    console.log("\n🔄 Iniciando conexión con Baileys...\n");
-    console.log("🔌 Preparando conexión...");
+    console.log("\n🔌 Preparando conexión segura...\n");
 
+    // Config UNIVERSAL + COMPATIBLE CON BUSINESS/DUAL
     const sock = makeWASocket({
         version,
-        browser: ["Chrome (Linux)", "Desktop", "10.0"],
-        syncFull: false,
-        markOnlineOnConnect: false,
-        connectTimeoutMs: 60_000,
+        printQRInTerminal: metodo === "1",
+        browser: ["Tokito-MD", "Universal-Dual", "1.0"],
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys),
-        }
+            keys: makeCacheableSignalKeyStore(state.keys)
+        },
+        syncFullHistory: false,        // ANTI-BAN
+        markOnlineOnConnect: false,    // ANTI-BAN
+        generateHighQualityLinkPreview: false  // ANTI-BAN
     });
 
-    // ==============================
-    // GENERAR PAIRING CODE
-    // ==============================
+    // Pairing Code (seguro)
     if (metodo === "2") {
         sock.ev.on("connection.update", async ({ connection }) => {
             if (connection === "open") {
@@ -89,26 +92,43 @@ async function iniciarBot() {
                     const code = await sock.requestPairingCode(numero);
                     console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
                     console.log("👉", code);
-                    console.log("\n◾ Ingresa ese código en WhatsApp para vincular el bot.");
-                } catch (err) {
-                    console.log("❌ Error generando Pairing Code:", err.message);
+                    console.log("\nIngresa este código en WhatsApp (normal, business o dual).\n");
+                } catch (e) {
+                    console.log("❌ Error generando código:", e.message);
                 }
             }
         });
     }
 
-    // Guardar credenciales
     sock.ev.on("creds.update", saveCreds);
 
-    // EVENTO MENSAJES
+    // ==========================================================
+    //  LECTOR DE MENSAJES (CON ANTI-BAN)
+    // ==========================================================
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
+
+        if (mensajesEnMinuto >= MENSAJES_MAX_POR_MINUTO) {
+            console.log("⚠️ Anti-ban: límite de mensajes alcanzado.");
+            return;
+        }
+        mensajesEnMinuto++;
 
         const texto =
             msg.message.conversation ||
             msg.message.extendedTextMessage?.text ||
             "";
+
+        const from = msg.key.remoteJid;
+
+        console.log(`
+==========================
+📩 MENSAJE RECIBIDO
+🧑 De:      ${from}
+💬 Mensaje: ${texto}
+==========================
+`);
 
         if (!texto.startsWith(".")) return;
 
@@ -121,25 +141,31 @@ async function iniciarBot() {
         }
     });
 
-    // MANEJO DE DESCONEXIÓN
+    // ==========================================================
+    //  CONTROL DE CONEXIÓN
+    // ==========================================================
     sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+
         if (connection === "open") {
-            console.log("\n✅ Bot conectado correctamente.\n");
+            console.log("\n✅ Bot conectado correctamente.");
+            console.log("🟢 Compatible con cualquier tipo de WhatsApp.\n");
         }
 
         if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect =
+                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
 
-            if (reason === DisconnectReason.loggedOut) {
-                console.log("❌ Sesión cerrada. Eliminando carpeta...");
-                fs.rmSync(sessionPath, { recursive: true, force: true });
-                iniciarBot();
+            if (shouldReconnect) {
+                console.log("⚠️ Conexión perdida. Reconectando...");
+                setTimeout(() => iniciarBot(), 2500);
             } else {
-                console.log("⚠️ Reconectando...");
+                console.log("❌ Sesión cerrada desde el dispositivo.");
+                fs.rmSync(sessionPath, { recursive: true, force: true });
                 iniciarBot();
             }
         }
     });
+
 }
 
 iniciarBot();
