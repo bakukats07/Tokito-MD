@@ -58,7 +58,6 @@ async function iniciarBot() {
     const metodo = await menuAutenticacion();
     const numero = await pedirNumero();
 
-    // Carpeta de sesión
     const sessionPath = path.join(__dirname, "sessions", numero);
     fs.mkdirSync(sessionPath, { recursive: true });
 
@@ -66,11 +65,14 @@ async function iniciarBot() {
     const { version } = await fetchLatestBaileysVersion();
 
     console.log("\n🔄 Iniciando conexión con Baileys...\n");
+    console.log("🔌 Preparando conexión...");
 
     const sock = makeWASocket({
         version,
         browser: ["Chrome (Linux)", "Desktop", "10.0"],
-        printQRInTerminal: metodo === "1",
+        syncFull: false,
+        markOnlineOnConnect: false,
+        connectTimeoutMs: 60_000,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys),
@@ -78,27 +80,18 @@ async function iniciarBot() {
     });
 
     // ==============================
-    // PAIRING CODE (solo si eligió opción 2)
+    // GENERAR PAIRING CODE
     // ==============================
     if (metodo === "2") {
-        let pairingEnviado = false;
-
-        sock.ev.on("connection.update", async (update) => {
-            const { connection } = update;
-
-            if (connection === "connecting") {
-                console.log("🔌 Preparando conexión...");
-            }
-
-            if (connection === "open" && !pairingEnviado) {
-                pairingEnviado = true;
+        sock.ev.on("connection.update", async ({ connection }) => {
+            if (connection === "open") {
                 try {
                     const code = await sock.requestPairingCode(numero);
                     console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
                     console.log("👉", code);
-                    console.log("\nEscribe ese código en WhatsApp para enlazar tu bot.");
-                } catch (e) {
-                    console.log("❌ Error generando el código:", e.message);
+                    console.log("\n◾ Ingresa ese código en WhatsApp para vincular el bot.");
+                } catch (err) {
+                    console.log("❌ Error generando Pairing Code:", err.message);
                 }
             }
         });
@@ -107,26 +100,15 @@ async function iniciarBot() {
     // Guardar credenciales
     sock.ev.on("creds.update", saveCreds);
 
-    // ==============================
-    // EVENTO DE MENSAJES
-    // ==============================
+    // EVENTO MENSAJES
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
-        if (!msg || !msg.message) return;
+        if (!msg.message) return;
 
-        const texto = msg.message.conversation ||
-                      msg.message.extendedTextMessage?.text ||
-                      "";
-
-        const from = msg.key.remoteJid;
-
-        console.log(`
-==========================
-📩 MENSAJE RECIBIDO
-🧑 De:      ${from}
-💬 Mensaje: ${texto}
-==========================
-`);
+        const texto =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            "";
 
         if (!texto.startsWith(".")) return;
 
@@ -139,29 +121,25 @@ async function iniciarBot() {
         }
     });
 
-    // ==============================
-    // CONTROL DE CONEXIÓN
-    // ==============================
+    // MANEJO DE DESCONEXIÓN
     sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-
         if (connection === "open") {
             console.log("\n✅ Bot conectado correctamente.\n");
         }
 
         if (connection === "close") {
-            const reason = new Boom(lastDisconnect?.error).output?.statusCode;
+            const reason = lastDisconnect?.error?.output?.statusCode;
 
             if (reason === DisconnectReason.loggedOut) {
-                console.log("❌ Sesión borrada desde el dispositivo. Reiniciando login...");
+                console.log("❌ Sesión cerrada. Eliminando carpeta...");
                 fs.rmSync(sessionPath, { recursive: true, force: true });
-                return iniciarBot();
+                iniciarBot();
+            } else {
+                console.log("⚠️ Reconectando...");
+                iniciarBot();
             }
-
-            console.log("⚠️ Conexión perdida. Reconectando...");
-            return iniciarBot();
         }
     });
-
 }
 
 iniciarBot();
