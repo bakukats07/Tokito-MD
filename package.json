@@ -1,0 +1,14 @@
+```json
+{
+"name":"Tokito-MD",
+"version":"1.0.0",
+"description":"Un bot de WhatsApp para comexion rapida",
+"main":"index.js",
+"scripts":{
+"start":"node index.js"
+},
+"dependencies":{ 
+"whatsapp web.js":"1.14.0"
+ }
+}
+```
