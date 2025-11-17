@@ -1,41 +1,79 @@
 const {
   default: makeWASocket,
   fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
   useMultiFileAuthState,
-  makeCacheableSignalKeyStore
+  delay
 } = require("@whiskeysockets/baileys");
 
 const fs = require("fs");
 const path = require("path");
-const rl = require("readline").createInterface({
+const readline = require("readline");
+
+const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-const ask = q => new Promise(r => rl.question(q, r));
+const ask = q => new Promise(res => rl.question(q, res));
 
 async function iniciar() {
-
   console.clear();
   console.log(`
-===============================
-   SISTEMA TOKITO-MD
-   LOGIN UNIVERSAL WHATSAPP
-===============================
-[1] Código QR
-[2] Código de 8 dígitos
-`);
+=====================================================
+ 🔐 SISTEMA UNIVERSAL TOKITO-MD – BAILEYS LOGIN
+=====================================================
+[1] Escanear Código QR
+[2] Código de 8 dígitos (Pairing)
+=====================================================
+  `);
 
   const metodo = await ask("Elige 1 o 2: ");
   const numero = await ask("Número del bot: ");
 
-  const sessionPath = path.join(__dirname, "sessions", numero);
-  fs.mkdirSync(sessionPath, { recursive: true });
+  const sessionDir = path.join(__dirname, "sessions", numero);
+  fs.mkdirSync(sessionDir, { recursive: true });
 
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  // 🔥 El socket NORMAL (Baileys ya hace auto-conexión)
+  // ============================
+  // CASO 1 → PAIRING CODE
+  // ============================
+  if (metodo === "2" && !state.creds.registered) {
+    console.log("\n🔌 Generando pairing code...\n");
+
+    // ⚠ Crear socket en modo HEADLESS especial
+    const sock = makeWASocket({
+      version,
+      printQRInTerminal: false,
+      browser: ["Tokito-MD", "Dual", "1.0"],
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys)
+      }
+    });
+
+    // ⚠ Esperar a que esté listo antes de pedir el código
+    await delay(500);
+
+    try {
+      const code = await sock.requestPairingCode(numero);
+      console.log("👉 TU CÓDIGO DE 8 DÍGITOS:", code);
+      console.log("\nInsértalo en WhatsApp Business / Normal / Dual.\n");
+
+    } catch (err) {
+      console.log("❌ Error generando código:", err.message);
+    }
+
+    sock.ev.on("creds.update", saveCreds);
+
+    return;
+  }
+
+  // ============================
+  // CASO 2 → QR NORMAL
+  // ============================
   const sock = makeWASocket({
     version,
     printQRInTerminal: metodo === "1",
@@ -43,42 +81,15 @@ async function iniciar() {
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys)
-    },
+    }
   });
 
-  // ======================================================
-  //    P A I R I N G    C O D E
-  // ======================================================
-  if (metodo === "2" && !state.creds.registered) {
-    try {
-      // Esperar a que Baileys esté listo para pedir pairing
-      sock.ev.once("connection.update", async ({ connection }) => {
-        if (connection === "open") {
-          const code = await sock.requestPairingCode(numero);
-          console.log("\n🔐 TU CÓDIGO:");
-          console.log("👉", code, "\n");
-          console.log("Insértalo en WhatsApp Business / Normal / Dual.\n");
-        }
-      });
-    } catch (e) {
-      console.log("❌ Error generando código:", e.message);
-    }
-  }
-
-  // Guardar credenciales
   sock.ev.on("creds.update", saveCreds);
 
-  // Estado de conexión
   sock.ev.on("connection.update", ({ connection }) => {
-    if (connection === "open") {
-      console.log("✅ Sesión conectada correctamente!");
-    }
-
-    if (connection === "close") {
-      console.log("❌ Conexión cerrada. Reinicia el bot.");
-    }
+    if (connection === "open") console.log("✅ Conectado!");
+    if (connection === "close") console.log("❌ Conexión cerrada.");
   });
-
 }
 
 iniciar();
