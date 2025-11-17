@@ -10,16 +10,13 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 
-// Plugins
 const allfake = require("./lib/allfake.js");
 const plugins = require("./lib/loader.js");
 
-// Control de mensajes (ANTI-BAN)
 const MENSAJES_MAX_POR_MINUTO = 15; 
 let mensajesEnMinuto = 0;
 setInterval(() => mensajesEnMinuto = 0, 60 * 1000);
 
-// CLI
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -29,9 +26,6 @@ function preguntar(texto) {
     return new Promise(res => rl.question(texto, ans => res(ans.trim())));
 }
 
-// ==========================================================
-//  MENÚ DE AUTENTICACIÓN
-// ==========================================================
 async function menuAutenticacion() {
     console.clear();
     console.log(`
@@ -40,7 +34,7 @@ async function menuAutenticacion() {
  Compatible con:
  ✔ WhatsApp normal
  ✔ WhatsApp Business
- ✔ WhatsApp Dual / Clonado (Samsung/Xiaomi)
+ ✔ WhatsApp Dual / Clonado
  ✔ WhatsApp Business Dual
 =====================================================
 
@@ -54,9 +48,6 @@ Elige tu método de conexión:
     return await preguntar("Escribe 1 o 2: ");
 }
 
-// ==========================================================
-//  PROCESO PRINCIPAL
-// ==========================================================
 async function iniciarBot() {
 
     const metodo = await menuAutenticacion();
@@ -70,40 +61,39 @@ async function iniciarBot() {
 
     console.log("\n🔌 Preparando conexión segura...\n");
 
-    // Config UNIVERSAL + COMPATIBLE CON BUSINESS/DUAL
+    // CONFIG COMPATIBLE CON WHATSAPP BUSINESS / DUAL
     const sock = makeWASocket({
         version,
         printQRInTerminal: metodo === "1",
-        browser: ["Tokito-MD", "Universal-Dual", "1.0"],
+        // UserAgent oficial y permitido POR WhatsApp Business
+        browser: ["Chrome", "Windows", "10.0"],
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys)
         },
-        syncFullHistory: false,        // ANTI-BAN
-        markOnlineOnConnect: false,    // ANTI-BAN
-        generateHighQualityLinkPreview: false  // ANTI-BAN
+        syncFullHistory: false,
+        markOnlineOnConnect: false,
+        generateHighQualityLinkPreview: false
     });
 
-    // Pairing Code (seguro)
-    if (metodo === "2") {
-        sock.ev.on("connection.update", async ({ connection }) => {
-            if (connection === "open") {
-                try {
-                    const code = await sock.requestPairingCode(numero);
-                    console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
-                    console.log("👉", code);
-                    console.log("\nIngresa este código en WhatsApp (normal, business o dual).\n");
-                } catch (e) {
-                    console.log("❌ Error generando código:", e.message);
-                }
-            }
-        });
+    // ==========================================================
+    //   PAIRING CODE — ARREGLADO Y FUNCIONAL
+    // ==========================================================
+    if (metodo === "2" && !state.creds.registered) {
+        try {
+            const code = await sock.requestPairingCode(numero.replace(/\D/g, ""));
+            console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
+            console.log("👉", code, "\n");
+            console.log("Ingresa este código en WhatsApp (normal, Business o Dual).\n");
+        } catch (e) {
+            console.log("❌ Error generando código:", e.message);
+        }
     }
 
     sock.ev.on("creds.update", saveCreds);
 
     // ==========================================================
-    //  LECTOR DE MENSAJES (CON ANTI-BAN)
+    //  LECTOR DE MENSAJES
     // ==========================================================
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
@@ -148,7 +138,7 @@ async function iniciarBot() {
 
         if (connection === "open") {
             console.log("\n✅ Bot conectado correctamente.");
-            console.log("🟢 Compatible con cualquier tipo de WhatsApp.\n");
+            console.log("🟢 Compatible con todo tipo de WhatsApp.\n");
         }
 
         if (connection === "close") {
