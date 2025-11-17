@@ -68,15 +68,14 @@ async function iniciarBot() {
     console.log("\n🔄 Iniciando conexión con Baileys...\n");
 
     const sock = makeWASocket({
-        version,
-        printQRInTerminal: metodo === "1",
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys),
-        },
-        mobile: metodo === "2", // NECESARIO PARA EL CÓDIGO DE 8 DÍGITOS
-        browser: ["Ubuntu", "Chrome", "20.0"],
-    });
+    version,
+    browser: ["Chrome (Linux)", "Desktop", "10.0"],
+    printQRInTerminal: metodo === "1",
+    auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys),
+    }
+});
 
     // Código de emparejamiento (8 dígitos)
     if (metodo === "2") {
