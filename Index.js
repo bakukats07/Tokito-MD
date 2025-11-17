@@ -4,6 +4,7 @@ const {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
+
 const fs = require("fs");
 const path = require("path");
 const rl = require("readline").createInterface({
@@ -14,6 +15,7 @@ const rl = require("readline").createInterface({
 const ask = q => new Promise(r => rl.question(q, r));
 
 async function iniciar() {
+
   console.clear();
   console.log(`
 ===============================
@@ -33,42 +35,50 @@ async function iniciar() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
   const { version } = await fetchLatestBaileysVersion();
 
-  // 👇 PRIMERO CREAMOS SOCKET PERO **SIN** LOGIN REAL
+  // 🔥 El socket NORMAL (Baileys ya hace auto-conexión)
   const sock = makeWASocket({
     version,
     printQRInTerminal: metodo === "1",
-    browser: ["Chrome", "Windows", "10.0"],
+    browser: ["Tokito-MD", "Dual", "1.0"],
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys)
     },
-    // 🔥 IMPORTANTÍSIMO: NO AUTOCONECTAR
-    connectTimeoutMs: 0
   });
 
   // ======================================================
-  //      AQUI SE PIDE EL PAIRING CODE *ANTES* DE LOGIN
+  //    P A I R I N G    C O D E
   // ======================================================
   if (metodo === "2" && !state.creds.registered) {
     try {
-      const code = await sock.requestPairingCode(numero);
-      console.log("\n🔐 TU CÓDIGO:");
-      console.log("👉", code, "\n");
-      console.log("Insértalo en WhatsApp Business / Normal / Dual.\n");
+      // Esperar a que Baileys esté listo para pedir pairing
+      sock.ev.once("connection.update", async ({ connection }) => {
+        if (connection === "open") {
+          const code = await sock.requestPairingCode(numero);
+          console.log("\n🔐 TU CÓDIGO:");
+          console.log("👉", code, "\n");
+          console.log("Insértalo en WhatsApp Business / Normal / Dual.\n");
+        }
+      });
     } catch (e) {
-      console.log("Error generando code:", e.message);
+      console.log("❌ Error generando código:", e.message);
     }
   }
 
-  // --------------------------------------------------
-  //  AHORA sí conectamos (DESPUÉS del pairing code)
-  // --------------------------------------------------
+  // Guardar credenciales
   sock.ev.on("creds.update", saveCreds);
 
+  // Estado de conexión
   sock.ev.on("connection.update", ({ connection }) => {
-    if (connection === "open")
-      console.log("✅ Sesión conectada!");
+    if (connection === "open") {
+      console.log("✅ Sesión conectada correctamente!");
+    }
+
+    if (connection === "close") {
+      console.log("❌ Conexión cerrada. Reinicia el bot.");
+    }
   });
+
 }
 
 iniciar();
