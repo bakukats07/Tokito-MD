@@ -1,7 +1,7 @@
 {
-  "main": ["menu", "help"],
-  "admin": ["ban", "kick"],
-  "stalker": ["profile", "track"],
-  "user": ["info"],
-  "premium": ["gpt", "imggen"]
+  "comandos": {
+    "utilidad": ["ping", "menu", "estado"],
+    "grupos": ["add", "kick", "promote"],
+    "admin": ["toggleadmin", "banchat", "unbanchat", "allfake-status"]
+  }
 }
