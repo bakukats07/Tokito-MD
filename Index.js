@@ -3,7 +3,8 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    DisconnectReason
 } = require("@whiskeysockets/baileys");
 
 const fs = require("fs");
@@ -13,17 +14,14 @@ const settings = require("./settings.js");
 const allfake = require("./lib/allfake.js");
 const plugins = require("./lib/loader.js");
 
-// ==========================
-// CONSOLA interactiva
-// ==========================
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-// ==========================
-// PREGUNTAR AUTENTICACIÓN
-// ==========================
+// ==============================
+// Selección de método de login
+// ==============================
 async function menuAutenticacion() {
     return new Promise(resolve => {
         console.log(`
@@ -37,14 +35,14 @@ Elige un método de inicio:
 [2] Código de 8 dígitos (Pairing Code)
 
 =====================================================
-        `);
+`);
         rl.question("Escribe 1 o 2: ", res => resolve(res.trim()));
     });
 }
 
-// ==========================
-// PREGUNTAR NÚMERO para sesión
-// ==========================
+// ==============================
+// Preguntar número
+// ==============================
 async function pedirNumero() {
     return new Promise(resolve => {
         rl.question("\n🔢 Ingresa el número del bot (ej: 573001112233): ", res => {
@@ -53,16 +51,16 @@ async function pedirNumero() {
     });
 }
 
-// ==========================
-// INICIO PRINCIPAL
-// ==========================
-async function iniciar() {
+// ==============================
+// Función principal
+// ==============================
+async function iniciarBot() {
     const metodo = await menuAutenticacion();
     const numero = await pedirNumero();
 
+    // Crear carpeta de sesión
     const sessionPath = path.join(__dirname, "sessions", numero);
-
-    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
+    fs.mkdirSync(sessionPath, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
@@ -76,12 +74,11 @@ async function iniciar() {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys),
         },
-        mobile: false
+        mobile: metodo === "2", // NECESARIO PARA EL CÓDIGO DE 8 DÍGITOS
+        browser: ["Ubuntu", "Chrome", "20.0"],
     });
 
-    // ==========================
-    // PAIRING CODE (8 dígitos)
-    // ==========================
+    // Código de emparejamiento (8 dígitos)
     if (metodo === "2") {
         const code = await sock.requestPairingCode(numero);
         console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
@@ -89,19 +86,18 @@ async function iniciar() {
         console.log("\nEscribe ese código en WhatsApp para enlazar tu bot.");
     }
 
-    // ==========================
-    // EVENTO: CREDENCIALES
-    // ==========================
+    // Guardar credenciales
     sock.ev.on("creds.update", saveCreds);
 
-    // ==========================
-    // EVENTO: RECIBIR MENSAJE
-    // ==========================
+    // EVENTO MENSAJE
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
 
-        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        const texto = msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            "";
+
         const from = msg.key.remoteJid;
 
         console.log(`
@@ -110,32 +106,48 @@ async function iniciar() {
 🧑 De:      ${from}
 💬 Mensaje: ${texto}
 ==========================
-        `);
+`);
 
-        if (!texto.startsWith(".")) {
-            return;
-        }
+        if (!texto.startsWith(".")) return;
 
         const comando = texto.slice(1).trim().toLowerCase();
-        const encontrado = plugins[comando];
 
-        if (encontrado) {
-            return encontrado(sock, msg);
+        if (plugins[comando]) {
+            plugins[comando](sock, msg);
         } else {
-            return allfake(sock, msg, comando);
+            allfake(sock, msg, comando);
         }
     });
 
-    sock.ev.on("connection.update", ({ connection }) => {
+    // EVENTO CONEXIÓN
+    sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
         if (connection === "open") {
-            console.log("\n✅ Bot conectado correctamente.");
+            console.log("\n✅ Bot conectado correctamente.\n");
         }
+
         if (connection === "close") {
-            console.log("\n❌ Conexión cerrada. Intentando reconectar...");
-            iniciar();
+            const reason = new Boom(lastDisconnect?.error).output.statusCode;
+
+            switch (reason) {
+                case DisconnectReason.loggedOut:
+                    console.log("❌ Sesión cerrada. Eliminando carpeta y reiniciando login.");
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                    iniciarBot();
+                    break;
+
+                case DisconnectReason.restartRequired:
+                    console.log("♻️ Se requiere reinicio del socket.");
+                    iniciarBot();
+                    break;
+
+                default:
+                    console.log("❌ Conexión perdida. Reconectando...");
+                    iniciarBot();
+                    break;
+            }
         }
     });
-
 }
 
-iniciar();
+// Iniciar
+iniciarBot();
