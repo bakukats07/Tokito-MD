@@ -1,104 +1,141 @@
+const { Boom } = require("@hapi/boom");
 const {
     default: makeWASocket,
     useMultiFileAuthState,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 
 const fs = require("fs");
 const path = require("path");
-const qrcode = require("qrcode-terminal");
-
+const readline = require("readline");
 const settings = require("./settings.js");
-const db = require("./db.json");
 const allfake = require("./lib/allfake.js");
 const plugins = require("./lib/loader.js");
 
-const database = require("./db/database.json");
+// ==========================
+// CONSOLA interactiva
+// ==========================
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
 
-// LIMPIEZA /tmp
-setInterval(() => {
-    const tmp = path.join(__dirname, "tmp");
-    if (!fs.existsSync(tmp)) return;
-    fs.readdirSync(tmp).forEach(f => fs.unlinkSync(path.join(tmp, f)));
-}, 15000);
+// ==========================
+// PREGUNTAR AUTENTICACIÓN
+// ==========================
+async function menuAutenticacion() {
+    return new Promise(resolve => {
+        console.log(`
+=====================================================
+        SISTEMA DE AUTENTICACIÓN – BAILEYS BOT       
+=====================================================
 
-// MENÚ
-console.clear();
-console.log(`
-===============================
-   BAILEYS BOT — INICIO
-===============================
+Elige un método de inicio:
 
-1) Conexión con Código QR
-2) Conexión con Código de 8 Dígitos
+[1] Código QR  
+[2] Código de 8 dígitos (Pairing Code)
 
-Escribe 1 o 2:
-`);
+=====================================================
+        `);
+        rl.question("Escribe 1 o 2: ", res => resolve(res.trim()));
+    });
+}
 
-process.stdin.once("data", async data => {
-    const opcion = data.toString().trim();
+// ==========================
+// PREGUNTAR NÚMERO para sesión
+// ==========================
+async function pedirNumero() {
+    return new Promise(resolve => {
+        rl.question("\n🔢 Ingresa el número del bot (ej: 573001112233): ", res => {
+            resolve(res.trim());
+        });
+    });
+}
 
-    console.clear();
+// ==========================
+// INICIO PRINCIPAL
+// ==========================
+async function iniciar() {
+    const metodo = await menuAutenticacion();
+    const numero = await pedirNumero();
 
-    if (opcion !== "1" && opcion !== "2") {
-        console.log("❌ Opción inválida.");
-        process.exit();
+    const sessionPath = path.join(__dirname, "sessions", numero);
+
+    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
+
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
+
+    console.log("\n🔄 Iniciando conexión con Baileys...\n");
+
+    const sock = makeWASocket({
+        version,
+        printQRInTerminal: metodo === "1",
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys),
+        },
+        mobile: false
+    });
+
+    // ==========================
+    // PAIRING CODE (8 dígitos)
+    // ==========================
+    if (metodo === "2") {
+        const code = await sock.requestPairingCode(numero);
+        console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
+        console.log("👉", code);
+        console.log("\nEscribe ese código en WhatsApp para enlazar tu bot.");
     }
 
-    console.log("Escribe el número del bot (Ej: 573001234567)");
-    process.stdin.once("data", async num => {
+    // ==========================
+    // EVENTO: CREDENCIALES
+    // ==========================
+    sock.ev.on("creds.update", saveCreds);
 
-        const numero = num.toString().trim();
-        const sessionDir = path.join(__dirname, "sessions", numero);
+    // ==========================
+    // EVENTO: RECIBIR MENSAJE
+    // ==========================
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message) return;
 
-        fs.mkdirSync(sessionDir, { recursive: true });
+        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        const from = msg.key.remoteJid;
 
-        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-        const { version } = await fetchLatestBaileysVersion();
+        console.log(`
+==========================
+📩 MENSAJE RECIBIDO
+🧑 De:      ${from}
+💬 Mensaje: ${texto}
+==========================
+        `);
 
-        const sock = makeWASocket({
-            version,
-            auth: state,
-            printQRInTerminal: opcion === "1"
-        });
-
-        // Código 8 dígitos
-        if (opcion === "2") {
-            sock.on("connection.update", ({ qr }) => {
-                if (qr) {
-                    console.log("🔢 CÓDIGO 8 DÍGITOS:");
-                    qrcode.generate(qr, { small: true });
-                }
-            });
+        if (!texto.startsWith(".")) {
+            return;
         }
 
-        // Mensajes
-        sock.ev.on("messages.upsert", async m => {
-            const msg = m.messages[0];
-            if (!msg.message) return;
+        const comando = texto.slice(1).trim().toLowerCase();
+        const encontrado = plugins[comando];
 
-            const jid = msg.key.remoteJid;
-            const text = msg.message.conversation || "";
-
-            if (settings.logs) {
-                console.log("\n📩 NUEVO MENSAJE");
-                console.log("Tipo:", jid.includes("@g") ? "Grupo" : "Privado");
-                console.log("Chat:", jid);
-                console.log("Mensaje:", text);
-            }
-
-            const prefix = settings.prefix.find(p => text.startsWith(p));
-            if (!prefix) return;
-
-            const comando = text.slice(prefix.length).trim().toLowerCase();
-
-            if (plugins[comando]) {
-                return plugins[comando](sock, msg);
-            }
-
-            return allfake(msg, comando, plugins);
-        });
-
-        sock.ev.on("creds.update", saveCreds);
+        if (encontrado) {
+            return encontrado(sock, msg);
+        } else {
+            return allfake(sock, msg, comando);
+        }
     });
-});
+
+    sock.ev.on("connection.update", ({ connection }) => {
+        if (connection === "open") {
+            console.log("\n✅ Bot conectado correctamente.");
+        }
+        if (connection === "close") {
+            console.log("\n❌ Conexión cerrada. Intentando reconectar...");
+            iniciar();
+        }
+    });
+
+}
+
+iniciar();
