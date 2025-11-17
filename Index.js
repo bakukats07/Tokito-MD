@@ -1,41 +1,104 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const client = new Client({
-    authStrategy: new LocalAuth()
-});
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
+} = require("@whiskeysockets/baileys");
 
-const path = require('path');
-const fs = require('fs');
+const fs = require("fs");
+const path = require("path");
+const qrcode = require("qrcode-terminal");
 
-const plugins = require(path.join(__dirname, 'lib', 'loader.js'));
-const db = require('./lib/db.json');
+const settings = require("./settings.js");
+const db = require("./db.json");
+const allfake = require("./lib/allfake.js");
+const plugins = require("./lib/loader.js");
 
-const prefijos = ['.', '/', '^', '#'];
+const database = require("./db/database.json");
 
-client.on('ready', () => {
-    console.log('El bot está listo y conectado');
-});
+// LIMPIEZA /tmp
+setInterval(() => {
+    const tmp = path.join(__dirname, "tmp");
+    if (!fs.existsSync(tmp)) return;
+    fs.readdirSync(tmp).forEach(f => fs.unlinkSync(path.join(tmp, f)));
+}, 15000);
 
-client.on('message', async (message) => {
-    const prefijoUsado = prefijos.find(p => message.body.startsWith(p));
+// MENÚ
+console.clear();
+console.log(`
+===============================
+   BAILEYS BOT — INICIO
+===============================
 
-    if (prefijoUsado) {
-        const comando = message.body.slice(prefijoUsado.length).trim().toLowerCase();
+1) Conexión con Código QR
+2) Conexión con Código de 8 Dígitos
 
-        // Verificar si el comando existe en la base de datos
-        for (let categoria in db) {
-            if (db[categoria].includes(comando)) {
-                const plugin = plugins[comando];
-                if (plugin) {
-                    await plugin(client, message);
-                } else {
-                    message.reply('Comando no implementado aún.');
+Escribe 1 o 2:
+`);
+
+process.stdin.once("data", async data => {
+    const opcion = data.toString().trim();
+
+    console.clear();
+
+    if (opcion !== "1" && opcion !== "2") {
+        console.log("❌ Opción inválida.");
+        process.exit();
+    }
+
+    console.log("Escribe el número del bot (Ej: 573001234567)");
+    process.stdin.once("data", async num => {
+
+        const numero = num.toString().trim();
+        const sessionDir = path.join(__dirname, "sessions", numero);
+
+        fs.mkdirSync(sessionDir, { recursive: true });
+
+        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+        const { version } = await fetchLatestBaileysVersion();
+
+        const sock = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: opcion === "1"
+        });
+
+        // Código 8 dígitos
+        if (opcion === "2") {
+            sock.on("connection.update", ({ qr }) => {
+                if (qr) {
+                    console.log("🔢 CÓDIGO 8 DÍGITOS:");
+                    qrcode.generate(qr, { small: true });
                 }
-                return;
-            }
+            });
         }
 
-        message.reply('Comando desconocido.');
-    }
-});
+        // Mensajes
+        sock.ev.on("messages.upsert", async m => {
+            const msg = m.messages[0];
+            if (!msg.message) return;
 
-client.initialize();
+            const jid = msg.key.remoteJid;
+            const text = msg.message.conversation || "";
+
+            if (settings.logs) {
+                console.log("\n📩 NUEVO MENSAJE");
+                console.log("Tipo:", jid.includes("@g") ? "Grupo" : "Privado");
+                console.log("Chat:", jid);
+                console.log("Mensaje:", text);
+            }
+
+            const prefix = settings.prefix.find(p => text.startsWith(p));
+            if (!prefix) return;
+
+            const comando = text.slice(prefix.length).trim().toLowerCase();
+
+            if (plugins[comando]) {
+                return plugins[comando](sock, msg);
+            }
+
+            return allfake(msg, comando, plugins);
+        });
+
+        sock.ev.on("creds.update", saveCreds);
+    });
+});
