@@ -1,0 +1,7 @@
+{
+  "main": ["menu", "help"],
+  "admin": ["ban", "kick"],
+  "stalker": ["profile", "track"],
+  "user": ["info"],
+  "premium": ["gpt", "imggen"]
+}
