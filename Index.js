@@ -58,6 +58,7 @@ async function iniciarBot() {
     const metodo = await menuAutenticacion();
     const numero = await pedirNumero();
 
+    // Carpeta de sesión
     const sessionPath = path.join(__dirname, "sessions", numero);
     fs.mkdirSync(sessionPath, { recursive: true });
 
@@ -77,15 +78,28 @@ async function iniciarBot() {
     });
 
     // ==============================
-    // GENERAR PAIRING CODE SOLO CUANDO ESTÉ LISTO
+    // PAIRING CODE (solo si eligió opción 2)
     // ==============================
     if (metodo === "2") {
-        sock.ev.once("connection.update", async ({ connection }) => {
-            if (connection === "open") {
-                const code = await sock.requestPairingCode(numero);
-                console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
-                console.log("👉", code);
-                console.log("\nEscribe ese código en WhatsApp para enlazar tu bot.");
+        let pairingEnviado = false;
+
+        sock.ev.on("connection.update", async (update) => {
+            const { connection } = update;
+
+            if (connection === "connecting") {
+                console.log("🔌 Preparando conexión...");
+            }
+
+            if (connection === "open" && !pairingEnviado) {
+                pairingEnviado = true;
+                try {
+                    const code = await sock.requestPairingCode(numero);
+                    console.log("\n🔐 TU CÓDIGO DE 8 DÍGITOS:");
+                    console.log("👉", code);
+                    console.log("\nEscribe ese código en WhatsApp para enlazar tu bot.");
+                } catch (e) {
+                    console.log("❌ Error generando el código:", e.message);
+                }
             }
         });
     }
@@ -98,11 +112,11 @@ async function iniciarBot() {
     // ==============================
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
-        if (!msg.message) return;
+        if (!msg || !msg.message) return;
 
         const texto = msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            "";
+                      msg.message.extendedTextMessage?.text ||
+                      "";
 
         const from = msg.key.remoteJid;
 
@@ -135,21 +149,19 @@ async function iniciarBot() {
         }
 
         if (connection === "close") {
+            const reason = new Boom(lastDisconnect?.error).output?.statusCode;
 
-            const shouldReconnect =
-                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-
-            if (shouldReconnect) {
-                console.log("⚠️ Conexión perdida. Reconectando...");
-                setTimeout(() => iniciarBot(), 2000);
-            } else {
-                console.log("❌ Sesión cerrada desde el dispositivo.");
+            if (reason === DisconnectReason.loggedOut) {
+                console.log("❌ Sesión borrada desde el dispositivo. Reiniciando login...");
                 fs.rmSync(sessionPath, { recursive: true, force: true });
-                iniciarBot();
+                return iniciarBot();
             }
+
+            console.log("⚠️ Conexión perdida. Reconectando...");
+            return iniciarBot();
         }
     });
 
 }
 
-iniciarBot(); 
+iniciarBot();
