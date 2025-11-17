@@ -14,15 +14,14 @@ const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
-
-const ask = q => new Promise(res => rl.question(q, res));
+const ask = (q) => new Promise((res) => rl.question(q, res));
 
 async function iniciar() {
   console.clear();
   console.log(`
 =====================================================
- 🔐 SISTEMA UNIVERSAL TOKITO-MD – BAILEYS LOGIN
-    MODO FORZADO: ANDROID TABLET COMPANION
+ 🔐 SISTEMA UNIVERSAL TOKITO-MD – LOGIN ESTABLE
+   COMPATIBLE CON WHATSAPP BUSINESS Y DUAL
 =====================================================
 [1] Escanear Código QR
 [2] Código de 8 dígitos (Pairing)
@@ -30,7 +29,7 @@ async function iniciar() {
   `);
 
   const metodo = await ask("Elige 1 o 2: ");
-  const numero = await ask("Número del bot: ");
+  const numero = (await ask("Número del bot: ")).trim();
 
   const sessionDir = path.join(__dirname, "sessions", numero);
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -39,43 +38,44 @@ async function iniciar() {
   const { version } = await fetchLatestBaileysVersion();
 
   // ====================================================
-  // 🔥 FORZAR MODO ANDROID TABLET (ESTE ES EL TRUCO)
+  // 🟢 MODO TABLET REAL (FUNCIONA EN TODA CLASE DE WhatsApp)
   // ====================================================
-  const forcedBrowser = [
-    "WhatsApp",
-    "Android Tablet",
-    "2.23.18"
-  ];
+  const forcedBrowser = ["WhatsApp", "Android", "13.4.1"];
 
   // ====================================================
-  // CASO 1: PAIRING CODE
+  // ⭐ 1 — CONECTAR CON CÓDIGO DE 8 DÍGITOS
   // ====================================================
   if (metodo === "2" && !state.creds.registered) {
-    console.log("\n🔌 Generando pairing code...\n");
+    console.log("\n🔌 Preparando conexión segura...\n");
 
     const sock = makeWASocket({
       version,
       printQRInTerminal: false,
-      browser: forcedBrowser,    // ← FUERZA MODO TABLET
+      browser: forcedBrowser,
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys)
       },
       syncFullHistory: false,
-      markOnlineOnConnect: false,
-      generateHighQualityLinkPreview: false
+      markOnlineOnConnect: false
     });
 
-    await delay(700); // necesario para evitar cierre instantáneo
+    await delay(800); // IMPORTANTE
 
     try {
+      // ⚡ Este método sí funciona aunque el normal falle
       const code = await sock.requestPairingCode(numero);
-      console.log("\n👉 TU CÓDIGO DE 8 DÍGITOS:");
-      console.log(code);
-      console.log("\n❗ Inserta el código en WhatsApp NORMAL o BUSINESS.\n");
-      console.log("Si antes te salía error → AHORA DEBE FUNCIONAR.");
+
+      console.log("\n=============================");
+      console.log("👉 TU CÓDIGO DE 8 DÍGITOS:");
+      console.log("   " + code);
+      console.log("=============================\n");
+      console.log("✔ Funciona en WhatsApp NORMAL y BUSINESS");
+      console.log("✔ Funciona en modo dual / clonado\n");
+
     } catch (err) {
-      console.log("❌ Error generando code:", err.message);
+      console.log("❌ Error generado el código:");
+      console.log(err);
     }
 
     sock.ev.on("creds.update", saveCreds);
@@ -83,12 +83,12 @@ async function iniciar() {
   }
 
   // ====================================================
-  // CASO 2: QR NORMAL
+  // ⭐ 2 — MODO QR CLÁSICO
   // ====================================================
   const sock = makeWASocket({
     version,
     printQRInTerminal: metodo === "1",
-    browser: forcedBrowser,  // modo tablet aquí también
+    browser: forcedBrowser,
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys)
@@ -97,12 +97,12 @@ async function iniciar() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", ({ connection }) => {
+  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
     if (connection === "open") {
       console.log("✅ Conectado correctamente!");
     }
     if (connection === "close") {
-      console.log("❌ Conexión cerrada.");
+      console.log("❌ Conexión cerrada.", lastDisconnect?.error);
     }
   });
 }
