@@ -1,12 +1,14 @@
 {
   "name": "Tokito-MD",
   "version": "1.0.0",
-  "description": "Un bot de WhatsApp para conexión rápida",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": { 
-    "whatsapp-web.js": "^1.14.0"
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.0.0",
+    "pino": "^8.0.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }
