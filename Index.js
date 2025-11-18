@@ -1,5 +1,5 @@
 // index.js — TOKITO-MD Paired Mode estable (Safari + Android 13)
-// Compatible con Node 20+, Baileys whiskeysockets edición pairing actual
+// Compatible con Node 20+, Baileys (whiskeysockets) con QR por "connection.update"
 
 const {
   default: makeWASocket,
@@ -14,42 +14,43 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 const ask = (q) => new Promise(res => rl.question(q, res));
 
-// --- ajustes ---
+// -------- Ajustes --------
 const MAX_PAIR_ATTEMPTS = 6;
 const BASE_BACKOFF_MS = 1500;
 const MAX_BACKOFF_MS = 9000;
-const PAIR_WAIT_TIMEOUT = 65000; // 65s
+const PAIR_WAIT_TIMEOUT = 65000;
 
-// UA más estable actualmente (simula WebView Android)
+// UA más estable actualmente para pairing
 const SAFARI_ANDROID_UA = ["Safari", "Android", "13"];
 
-// sesiones
+// Carpeta raíz de sesiones
 const SESSION_ROOT = path.join(__dirname, "sessions");
 if (!fs.existsSync(SESSION_ROOT)) fs.mkdirSync(SESSION_ROOT, { recursive: true });
 
-// espera humana
+// -------- Utilidades --------
 function humanWait(ms = BASE_BACKOFF_MS) {
   const jitter = Math.floor(Math.random() * 400);
-  const final = Math.min(MAX_BACKOFF_MS, ms + jitter);
-  return delay(final);
+  return delay(Math.min(MAX_BACKOFF_MS, ms + jitter));
 }
 
-// formatear código
 function formatCode(code = "") {
   const clean = code.replace(/[^A-Za-z0-9]/g, "");
   return clean.match(/.{1,4}/g)?.join("-") || clean;
 }
 
-// crear carpeta
-function ensureSessionDir(n) {
-  const d = path.join(SESSION_ROOT, n);
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  return d;
+function ensureSessionDir(number) {
+  const dir = path.join(SESSION_ROOT, number);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
+// -------- QR MODE (actualizado sin printQRInTerminal) --------
 async function startQRMode() {
   const sessionDir = path.join(SESSION_ROOT, "default");
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -57,16 +58,28 @@ async function startQRMode() {
 
   const sock = makeWASocket({
     version,
-    printQRInTerminal: true,
+    printQRInTerminal: false, // ¡eliminado!
     browser: SAFARI_ANDROID_UA,
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys) },
     syncFullHistory: false,
-    markOnlineOnConnect: false,
+    markOnlineOnConnect: false
   });
 
   sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-    if (connection === "open") console.log("✅ Conectado (QR).");
+
+  sock.ev.on("connection.update", ({ qr, connection, lastDisconnect }) => {
+
+    if (qr) {
+      console.clear();
+      console.log("================ QR PARA ESCANEAR ================");
+      console.log(qr);
+      console.log("==================================================");
+    }
+
+    if (connection === "open") {
+      console.log("✅ Conectado (QR).");
+    }
+
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log("❌ Conexión cerrada:", code);
@@ -78,6 +91,7 @@ async function startQRMode() {
   });
 }
 
+// -------- PAIRING MODE --------
 async function startPairing(number) {
   const clean = number.replace(/\D/g, "");
   const sessionDir = ensureSessionDir(clean);
@@ -89,6 +103,7 @@ async function startPairing(number) {
 
   while (attempt < MAX_PAIR_ATTEMPTS) {
     attempt++;
+
     console.clear();
     console.log(`🔁 Intento ${attempt}/${MAX_PAIR_ATTEMPTS}`);
 
@@ -106,16 +121,17 @@ async function startPairing(number) {
     await delay(600 + Math.random() * 500);
 
     try {
-      const rawCode = await sock.requestPairingCode(clean);
-      const pretty = formatCode(rawCode);
+      const raw = await sock.requestPairingCode(clean);
+      const pretty = formatCode(raw);
 
       console.log("================================");
       console.log("👉 CÓDIGO DE 8 DÍGITOS:");
       console.log("   " + pretty);
       console.log("================================");
 
-      const success = await new Promise(resolve => {
+      const success = await new Promise((resolve) => {
         let done = false;
+
         const timer = setTimeout(() => !done && resolve(false), PAIR_WAIT_TIMEOUT);
 
         sock.ev.on("creds.update", () => {
@@ -140,9 +156,11 @@ async function startPairing(number) {
 
         sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
           if (connection === "open") console.log("✅ Reconectado OK");
+
           if (connection === "close") {
             const code = lastDisconnect?.error?.output?.statusCode;
             console.log("❌ Conexión cerrada:", code);
+
             if (code !== DisconnectReason.loggedOut) {
               console.log("🔄 Reintentando en 2s...");
               setTimeout(() => startPairing(clean), 2000);
@@ -154,6 +172,7 @@ async function startPairing(number) {
       } else {
         console.log("⚠ Pairing NO aceptado. Cerrando socket...");
       }
+
     } catch (e) {
       console.log("⚠ Error solicitando pairing:", e.message);
     }
@@ -162,9 +181,10 @@ async function startPairing(number) {
     await humanWait(BASE_BACKOFF_MS * attempt);
   }
 
-  console.log("⛔ Se agotaron los intentos. Cooldown 30–60 min recomendado.");
+  console.log("⛔ Se agotaron los intentos. Cooldown recomendado: 30–60 min.");
 }
 
+// -------- MENÚ --------
 (async () => {
   console.clear();
   console.log("======================================");
@@ -177,6 +197,7 @@ async function startPairing(number) {
   const op = (await ask("Opción: ")).trim();
 
   if (op === "1") return startQRMode();
+
   if (op === "2") {
     const num = await ask("Número (ej: 573001112233): ");
     return startPairing(num.trim());
