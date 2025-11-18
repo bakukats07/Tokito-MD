@@ -6,20 +6,11 @@ const {
 
 const qrcode = require("qrcode");
 const fs = require("fs");
-const path = require("path");
+const { exec } = require("child_process");
 
 console.clear();
 
-// Carpeta donde se guardará el QR:
-const QR_FOLDER = "/sdcard/Tokito-QR";
-const QR_PATH = path.join(QR_FOLDER, "qr.png");
-
-// Crear carpeta si no existe
-if (!fs.existsSync(QR_FOLDER)) {
-    fs.mkdirSync(QR_FOLDER, { recursive: true });
-}
-
-// MENU
+// ================= MENU =================
 console.log("======================================");
 console.log("         TOKITO-MD — LOGIN            ");
 console.log("     (Safari Android User-Agent)      ");
@@ -27,18 +18,23 @@ console.log("======================================");
 console.log("[1] Escanear Código QR");
 console.log("[2] Código de 8 dígitos (Pairing)");
 console.log("======================================");
-
 process.stdout.write("Opción: ");
 
+// =========================================
+//             OPCIÓN USUARIO
+// =========================================
 process.stdin.once("data", async (data) => {
     const option = data.toString().trim();
 
-    if (option !== "1" && option !== "2") {
+    if (!["1", "2"].includes(option)) {
         console.log("❌ Opción inválida.");
         process.exit();
     }
 
+    // AUTH
     const { state, saveCreds } = await useMultiFileAuthState("./session");
+
+    // VERSION WHATSAPP
     const { version } = await fetchLatestBaileysVersion();
 
     const conn = makeWASocket({
@@ -48,36 +44,47 @@ process.stdin.once("data", async (data) => {
         version
     });
 
+    let qrGuardado = false;  // ← evita repetición del QR
+
     conn.ev.on("connection.update", async (update) => {
         const { qr, connection } = update;
 
-        // === MODO QR ===
-        if (qr && option === "1") {
-            try {
-                const img = await qrcode.toBuffer(qr, {
-                    type: "png",
-                    width: 512,    // tamaño óptimo
-                    margin: 2      // evita que se corte
-                });
+        // ================= QR MODE =================
+        if (qr && option === "1" && !qrGuardado) {
+            qrGuardado = true;
 
+            try {
+                // Ruta compatible 100% con galería
+                const folder = "/sdcard/Pictures/Tokito-QR";
+                const QR_PATH = `${folder}/qr.png`;
+
+                if (!fs.existsSync(folder)) {
+                    fs.mkdirSync(folder, { recursive: true });
+                }
+
+                const img = await qrcode.toBuffer(qr, { width: 600 });
                 fs.writeFileSync(QR_PATH, img);
+
+                // Forzar que Android actualice la galería
+                exec(`am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${QR_PATH}`);
 
                 console.log("\n=======================");
                 console.log("        QR LISTO");
                 console.log("=======================\n");
                 console.log("✔ Guardado en:", QR_PATH);
-                console.log("📱 Se verá en tu galería como 'qr.png'.\n");
+                console.log("📱 Ya debería aparecer en tu galería.\n");
 
             } catch (err) {
-                console.log("❌ Error al crear qr.png:", err);
+                console.log("❌ Error al crear el QR:", err);
             }
         }
 
-        // === MODO PAIRING ===
+        // =============== PAIRING MODE =================
         if (connection === "connecting" && option === "2") {
             console.log("🔢 Esperando el código de 8 dígitos...");
         }
 
+        // ================= OPEN =================
         if (connection === "open") {
             console.log("✔ Conectado a WhatsApp!");
         }
