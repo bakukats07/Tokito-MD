@@ -23,7 +23,8 @@ const ask = (q) => new Promise(res => rl.question(q, res));
 
 /* ------------------ CONFIG ------------------ */
 const SESSION_ROOT = path.join(__dirname, "sessions");
-const TMP_ROOT = path.join("/", "tmp", "tokito-php"); // /tmp/tokito-php
+const TMP_ROOT = path.join(__dirname, "tmp", "tokito-php");
+if (!fs.existsSync(TMP_ROOT)) fs.mkdirSync(TMP_ROOT, { recursive: true });
 const QR_SAVE_FOLDER = process.env.ANDROID_SDCARD_PATH || "/sdcard/Tokito-QR"; // tries /sdcard
 const MAX_PAIR_ATTEMPTS = 6;
 const PAIR_WAIT_TIMEOUT = 60_000; // ms to wait for acceptance
