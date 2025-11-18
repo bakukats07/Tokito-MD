@@ -10,7 +10,6 @@ const { exec } = require("child_process");
 
 console.clear();
 
-// MENU
 console.log("======================================");
 console.log("         TOKITO-MD — LOGIN            ");
 console.log("     (Safari Android User-Agent)      ");
@@ -29,44 +28,43 @@ process.stdin.once("data", async (data) => {
         process.exit();
     }
 
-    // AUTH
     const { state, saveCreds } = await useMultiFileAuthState("./session");
-
-    // VERSION WHATSAPP
     const { version } = await fetchLatestBaileysVersion();
 
-    // SOCKET
     const conn = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // NO imprimir en consola
         browser: ["Safari", "Android", "13"],
-        version
+        version,
+        printQRInTerminal: false
     });
 
-    // EVENTOS
+    let alreadySaved = false; // evita múltiples QR
+
     conn.ev.on("connection.update", async (update) => {
-        const { qr, connection } = update;
+        let { qr, connection } = update;
 
-        // === MODO QR ===
-        if (qr && option === "1") {
+        // SOLO modo QR
+        if (qr && option === "1" && !alreadySaved) {
             try {
-                // Carpeta donde se guardará la imagen de forma compatible
-                const folder = "/sdcard/Pictures/Tokito";
+                // Si el QR llega como array → convertir a texto plano
+                if (Array.isArray(qr)) {
+                    qr = qr.join("");
+                }
 
-                // Crear carpeta si no existe
+                const folder = "/sdcard/Pictures/Tokito";
                 if (!fs.existsSync(folder)) {
                     fs.mkdirSync(folder, { recursive: true });
                 }
 
                 const filePath = `${folder}/qr.png`;
 
-                // Generar QR más pequeño para que siempre sea legible
                 const img = await qrcode.toBuffer(qr, {
-                    width: 300,   // tamaño perfecto para Android
-                    margin: 1     // evita cortes
+                    width: 320,
+                    margin: 1
                 });
 
                 fs.writeFileSync(filePath, img);
+                alreadySaved = true;
 
                 console.log("\n=======================");
                 console.log("        QR LISTO");
@@ -75,22 +73,19 @@ process.stdin.once("data", async (data) => {
                 console.log(filePath);
                 console.log("📱 Abriendo imagen…\n");
 
-                // ABRIR imagen automáticamente
                 exec(`termux-open '${filePath}'`);
 
             } catch (err) {
-                console.log("❌ Error al crear qr.png:", err);
+                console.log("❌ Error al generar QR:", err);
             }
         }
 
-        // === MODO PAIRING ===
-        if (connection === "connecting" && option === "2") {
-            console.log("🔢 Esperando el código de 8 dígitos...");
-        }
-
-        // YA CONECTADO
         if (connection === "open") {
             console.log("✔ Conectado a WhatsApp!");
+        }
+
+        if (option === "2" && connection === "connecting") {
+            console.log("🔢 Esperando el código de 8 dígitos…");
         }
     });
 
