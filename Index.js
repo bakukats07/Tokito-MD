@@ -70,9 +70,19 @@ async function startQRMode() {
 
     if (qr) {
       console.clear();
-      console.log("=========== QR PARA ESCANEAR ===========");
-      qrcode.generate(qr, { small: true });
-      console.log("========================================");
+
+      console.log("==================================");
+      console.log("        QR PARA ESCANEAR");
+      console.log("==================================");
+
+      // 🔥 ULTRA SMALL QR — versión compacta mejorada
+      qrcode.generate(qr, {
+        small: true
+      });
+
+      console.log("==================================");
+      console.log("📱 Escanee rápidamente el QR");
+      console.log("==================================");
     }
 
     if (connection === "open") {
