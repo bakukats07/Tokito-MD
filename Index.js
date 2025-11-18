@@ -6,6 +6,7 @@ const {
 
 const qrcode = require("qrcode");
 const fs = require("fs");
+const { exec } = require("child_process");
 
 console.clear();
 
@@ -37,17 +38,22 @@ process.stdin.once("data", async (data) => {
     // SOCKET
     const conn = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // NO imprimir en consola
+        printQRInTerminal: false, // NO imprimir QR en consola
         browser: ["Safari", "Android", "13"],
         version
     });
+
+    // === PARA EVITAR MÚLTIPLES QR ===
+    let qrGenerado = false;
 
     // EVENTOS
     conn.ev.on("connection.update", async (update) => {
         const { qr, connection } = update;
 
         // === MODO QR ===
-        if (qr && option === "1") {
+        if (qr && option === "1" && !qrGenerado) {
+            qrGenerado = true; // Ya se generó un QR, no hacer más
+
             try {
                 const img = await qrcode.toBuffer(qr, { width: 256 });
 
@@ -57,7 +63,15 @@ process.stdin.once("data", async (data) => {
                 console.log("        QR LISTO");
                 console.log("=======================\n");
                 console.log("✔ Guardado en: qr.png");
-                console.log("📱 Ábrelo desde tu galería y escanéalo.");
+                console.log("📱 Abriendo imagen...\n");
+
+                // Abrir la imagen automáticamente en Termux
+                exec("termux-open qr.png", (err) => {
+                    if (err) {
+                        console.log("⚠ No se pudo abrir automáticamente, pero se guardó correctamente.");
+                    }
+                });
+
             } catch (err) {
                 console.log("❌ Error al crear qr.png:", err);
             }
