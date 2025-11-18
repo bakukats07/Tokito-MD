@@ -1,22 +1,24 @@
-import makeWASocket, {
+const {
+    default: makeWASocket,
     useMultiFileAuthState,
     fetchLatestBaileysVersion
-} from "@whiskeysockets/baileys";
-import qrcode from "qrcode";
-import fs from "fs";
+} = require("@whiskeysockets/baileys");
+const qrcode = require("qrcode");
+const fs = require("fs");
 
 console.clear();
 
-// INTERFAZ MENU
+// MENU
 console.log("======================================");
-console.log("         TOKITO-MD — LOGIN             ");
-console.log("     (Safari Android User-Agent)       ");
+console.log("         TOKITO-MD — LOGIN            ");
+console.log("     (Safari Android User-Agent)      ");
 console.log("======================================");
 console.log("[1] Escanear Código QR");
 console.log("[2] Código de 8 dígitos (Pairing)");
 console.log("======================================");
 
 process.stdout.write("Opción: ");
+
 process.stdin.once("data", async (data) => {
     const option = data.toString().trim();
 
@@ -25,49 +27,48 @@ process.stdin.once("data", async (data) => {
         process.exit();
     }
 
-    // AUTH MULTI FILE
+    // AUTH
     const { state, saveCreds } = await useMultiFileAuthState("./session");
 
-    // WHATSAPP VERSION
+    // VERSION WHATSAPP
     const { version } = await fetchLatestBaileysVersion();
 
     // SOCKET
     const conn = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // IMPORTANTE: NO IMPRIMIR QR
+        printQRInTerminal: false, // NO imprimir
         browser: ["Safari", "Android", "13"],
         version
     });
 
-    // LISTENER DEL QR
+    // EVENTOS
     conn.ev.on("connection.update", async (update) => {
         const { qr, connection } = update;
 
-        // SI GENERA QR → GUARDARLO COMO PNG
+        // MODO QR
         if (qr && option === "1") {
             try {
-                const qrBuffer = await qrcode.toBuffer(qr, { width: 256 });
-                fs.writeFileSync("qr.png", qrBuffer);
+                const img = await qrcode.toBuffer(q, { width: 256 });
+                fs.writeFileSync("qr.png", img);
 
                 console.log("\n=======================");
-                console.log("   📸 QR GENERADO");
+                console.log("        QR LISTO");
                 console.log("=======================\n");
-                console.log("✔ Se guardó en: qr.png");
-                console.log("➡ Ábrelo desde tu galería o archivos para escanearlo.\n");
-
+                console.log("✔ Guardado en: qr.png");
+                console.log("📱 Ábrelo en galería y escanéalo.");
             } catch (err) {
-                console.log("❌ Error al generar la imagen QR:", err);
+                console.log("❌ Error al crear qr.png:", err);
             }
         }
 
-        // SI PIDE PAIRING CODE (8 DÍGITOS)
-        if (connection === "close" && option === "2") {
-            console.log("🔢 Esperando el código de vinculación...");
+        // MODO PAIRING (código 8 dígitos)
+        if (connection === "connecting" && option === "2") {
+            console.log("🔢 Esperando el código en tu WhatsApp...");
         }
 
-        // CUANDO YA CONECTA
+        // YA CONECTÓ
         if (connection === "open") {
-            console.log("✔ Conectado correctamente a WhatsApp!");
+            console.log("✔ Conectado a WhatsApp!");
         }
     });
 
