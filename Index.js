@@ -9,7 +9,7 @@ const {
   DisconnectReason
 } = require("@whiskeysockets/baileys");
 
-const QRCode = require("qrcode"); // QR ultra small
+const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -28,7 +28,6 @@ const PAIR_WAIT_TIMEOUT = 65000;
 
 const SAFARI_ANDROID_UA = ["Safari", "Android", "13"];
 
-// Carpeta raíz de sesiones
 const SESSION_ROOT = path.join(__dirname, "sessions");
 if (!fs.existsSync(SESSION_ROOT)) fs.mkdirSync(SESSION_ROOT, { recursive: true });
 
@@ -49,9 +48,9 @@ function ensureSessionDir(number) {
   return dir;
 }
 
-// ───────────────────────────────────────────
-//           MODO QR — ULTRA SMALL REAL
-// ───────────────────────────────────────────
+// =====================================
+//           MODO QR — UTF8
+// =====================================
 async function startQRMode() {
   const sessionDir = path.join(SESSION_ROOT, "default");
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -68,7 +67,7 @@ async function startQRMode() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", async ({ qr, connection, lastDisconnect }) => {
+  sock.ev.on("connection.update", ({ qr, connection, lastDisconnect }) => {
 
     if (qr) {
       console.clear();
@@ -76,22 +75,24 @@ async function startQRMode() {
       console.log("        QR PARA ESCANEAR");
       console.log("==================================");
 
-      // QR ULTRA SMALL + recorte + compresión
-      QRCode.toString(qr, { type: "terminal", small: true }, (err, tiny) => {
-        if (err) return console.log("❌ Error generando QR:", err);
+      // 🌟 QR 100% compatible — UTF8 ASCII
+      QRCode.toString(
+        qr,
+        { type: "utf8" },
+        (err, asciiQR) => {
+          if (err) return console.log("❌ Error generando QR:", err);
 
-        const optimized = tiny
-          .split("\n")
-          .map(l => l.replace(/\s+$/g, ""))      // quitar espacios a la derecha
-          .filter(l => l.trim() !== "")         // eliminar líneas vacías
-          .map(l => l.replace(/██/g, "█"))      // compactar bloques dobles
-          .join("\n");
-
-        console.log(optimized);
-      });
+          console.log(
+            asciiQR
+              .split("\n")
+              .map(line => line.replace(/\s+$/g, "")) // limpiar bordes
+              .join("\n")
+          );
+        }
+      );
 
       console.log("==================================");
-      console.log("📱 Escanee rápidamente el QR");
+      console.log("📱 QR formato UTF8 (NO se deforma)");
       console.log("==================================");
     }
 
@@ -111,9 +112,9 @@ async function startQRMode() {
   });
 }
 
-// ───────────────────────────────────────────
-//           MODO PAIRING — 8 DÍGITOS
-// ───────────────────────────────────────────
+// =====================================
+//         MODO PAIRING — 8 DÍGITOS
+// =====================================
 async function startPairing(number) {
   const clean = number.replace(/\D/g, "");
   const sessionDir = ensureSessionDir(clean);
@@ -206,9 +207,9 @@ async function startPairing(number) {
   console.log("⛔ Se agotaron los intentos. Cooldown recomendado: 30–60 min.");
 }
 
-// ───────────────────────────────────────────
-//                     MENÚ
-// ───────────────────────────────────────────
+// =====================================
+//                 MENÚ
+// =====================================
 (async () => {
   console.clear();
   console.log("======================================");
