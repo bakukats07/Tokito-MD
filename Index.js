@@ -9,7 +9,7 @@ const {
   DisconnectReason
 } = require("@whiskeysockets/baileys");
 
-const qrcode = require("qrcode-terminal");
+const QRCode = require("qrcode"); // <-- NUEVO: QR ultra small
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -70,14 +70,16 @@ async function startQRMode() {
 
     if (qr) {
       console.clear();
-
       console.log("==================================");
       console.log("        QR PARA ESCANEAR");
       console.log("==================================");
 
-      // 🔥 ULTRA SMALL QR — versión compacta mejorada
-      qrcode.generate(qr, {
+      // QR ULTRA SMALL — versión compacta real
+      QRCode.toString(qr, {
+        type: "terminal",
         small: true
+      }, (err, tiny) => {
+        if (!err) console.log(tiny);
       });
 
       console.log("==================================");
