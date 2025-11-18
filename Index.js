@@ -38,39 +38,45 @@ process.stdin.once("data", async (data) => {
     // SOCKET
     const conn = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // NO imprimir QR en consola
+        printQRInTerminal: false, // NO imprimir en consola
         browser: ["Safari", "Android", "13"],
         version
     });
-
-    // === PARA EVITAR MÚLTIPLES QR ===
-    let qrGenerado = false;
 
     // EVENTOS
     conn.ev.on("connection.update", async (update) => {
         const { qr, connection } = update;
 
         // === MODO QR ===
-        if (qr && option === "1" && !qrGenerado) {
-            qrGenerado = true; // Ya se generó un QR, no hacer más
-
+        if (qr && option === "1") {
             try {
-                const img = await qrcode.toBuffer(qr, { width: 256 });
+                // Carpeta donde se guardará la imagen de forma compatible
+                const folder = "/sdcard/Pictures/Tokito";
 
-                fs.writeFileSync("qr.png", img);
+                // Crear carpeta si no existe
+                if (!fs.existsSync(folder)) {
+                    fs.mkdirSync(folder, { recursive: true });
+                }
+
+                const filePath = `${folder}/qr.png`;
+
+                // Generar QR más pequeño para que siempre sea legible
+                const img = await qrcode.toBuffer(qr, {
+                    width: 300,   // tamaño perfecto para Android
+                    margin: 1     // evita cortes
+                });
+
+                fs.writeFileSync(filePath, img);
 
                 console.log("\n=======================");
                 console.log("        QR LISTO");
                 console.log("=======================\n");
-                console.log("✔ Guardado en: qr.png");
-                console.log("📱 Abriendo imagen...\n");
+                console.log("✔ Guardado en:");
+                console.log(filePath);
+                console.log("📱 Abriendo imagen…\n");
 
-                // Abrir la imagen automáticamente en Termux
-                exec("termux-open qr.png", (err) => {
-                    if (err) {
-                        console.log("⚠ No se pudo abrir automáticamente, pero se guardó correctamente.");
-                    }
-                });
+                // ABRIR imagen automáticamente
+                exec(`termux-open '${filePath}'`);
 
             } catch (err) {
                 console.log("❌ Error al crear qr.png:", err);
