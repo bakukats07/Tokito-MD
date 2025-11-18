@@ -10,6 +10,7 @@ const {
   DisconnectReason
 } = require("@whiskeysockets/baileys");
 
+const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -26,7 +27,6 @@ const BASE_BACKOFF_MS = 1500;
 const MAX_BACKOFF_MS = 9000;
 const PAIR_WAIT_TIMEOUT = 65000;
 
-// UA más estable actualmente para pairing
 const SAFARI_ANDROID_UA = ["Safari", "Android", "13"];
 
 // Carpeta raíz de sesiones
@@ -50,7 +50,7 @@ function ensureSessionDir(number) {
   return dir;
 }
 
-// -------- QR MODE (actualizado sin printQRInTerminal) --------
+// -------- QR MODE --------
 async function startQRMode() {
   const sessionDir = path.join(SESSION_ROOT, "default");
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -58,7 +58,7 @@ async function startQRMode() {
 
   const sock = makeWASocket({
     version,
-    printQRInTerminal: false, // ¡eliminado!
+    printQRInTerminal: false,
     browser: SAFARI_ANDROID_UA,
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys) },
     syncFullHistory: false,
@@ -71,9 +71,9 @@ async function startQRMode() {
 
     if (qr) {
       console.clear();
-      console.log("================ QR PARA ESCANEAR ================");
-      console.log(qr);
-      console.log("==================================================");
+      console.log("=========== QR PARA ESCANEAR ===========");
+      qrcode.generate(qr, { small: true });
+      console.log("========================================");
     }
 
     if (connection === "open") {
