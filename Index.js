@@ -1,6 +1,7 @@
-// Index.js — TOKITO-MD (mejorado)
-// Requiere: @whiskeysockets/baileys, qrcode, qrcode-terminal
-// Node v24+, CommonJS
+// index.js — TOKITO-MD (Navideño Anime/Kawaii - Opción C)
+// Node: v20+ (probado en 24.x), CommonJS
+// Requisitos: @whiskeysockets/baileys, qrcode, qrcode-terminal
+// Copia este archivo a la raíz del bot y ejecuta: node index.js
 
 const {
   default: makeWASocket,
@@ -11,38 +12,52 @@ const {
   DisconnectReason
 } = require("@whiskeysockets/baileys");
 
-const qrcodeLib = require("qrcode");
+const qrcode = require("qrcode");
 const qrcodeTerm = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 const child = require("child_process");
 const readline = require("readline");
 
+// ------------------------- Configuración -------------------------
+const SESSION_ROOT = path.join(__dirname, "sessions");
+const TMP_ROOT = path.join(__dirname, "tmp", "tokito-php");
+const QR_SAVE_FOLDER = process.env.ANDROID_SDCARD_PATH || "/sdcard/Tokito-QR";
+const MAX_PAIR_ATTEMPTS = 6;
+const PAIR_WAIT_TIMEOUT = 60_000;
+const BACKOFF_BASE = 1400;
+const USER_AGENT = ["Safari", "Android", "13"]; // UA recomendado para pairing
+const DUMPER_INTERVAL_MS = 5000;
+const MAX_TMP_FILES = 150;
+
+// Asegurar carpetas
+if (!fs.existsSync(SESSION_ROOT)) fs.mkdirSync(SESSION_ROOT, { recursive: true });
+if (!fs.existsSync(TMP_ROOT)) fs.mkdirSync(TMP_ROOT, { recursive: true });
+try { if (!fs.existsSync(QR_SAVE_FOLDER)) fs.mkdirSync(QR_SAVE_FOLDER, { recursive: true }); } catch (e) { /* ignore */ }
+
+// ------------------------- Utilidades -------------------------
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise(res => rl.question(q, res));
 
-/* ------------------ CONFIG ------------------ */
-const SESSION_ROOT = path.join(__dirname, "sessions");
-const TMP_ROOT = path.join(__dirname, "tmp", "tokito-php");
-if (!fs.existsSync(TMP_ROOT)) fs.mkdirSync(TMP_ROOT, { recursive: true });
-const QR_SAVE_FOLDER = process.env.ANDROID_SDCARD_PATH || "/sdcard/Tokito-QR"; // tries /sdcard
-const MAX_PAIR_ATTEMPTS = 6;
-const PAIR_WAIT_TIMEOUT = 60_000; // ms to wait for acceptance
-const BACKOFF_BASE = 1400;
-const USER_AGENT = ["Safari", "Android", "13"]; // you can change: ["Chrome","Windows","10.0"]
-const DUMPER_ENABLED_DEFAULT = false; // si quieres que empiece a spamear tmp por defecto
-
-// Ensure folders
-if (!fs.existsSync(SESSION_ROOT)) fs.mkdirSync(SESSION_ROOT, { recursive: true });
-if (!fs.existsSync(TMP_ROOT)) fs.mkdirSync(TMP_ROOT, { recursive: true });
-if (!fs.existsSync(QR_SAVE_FOLDER)) {
-  try { fs.mkdirSync(QR_SAVE_FOLDER, { recursive: true }); } catch(e){ /* ignore */ }
+function nowIso() { return new Date().toISOString(); }
+function logNavideño(...parts) {
+  // Estilo C: kawaii/navideño — emojis suaves
+  const prefix = isHolidayMode() ? "❄️🎀 Tokito-MD" : "Tokito-MD";
+  console.log(prefix, "-", ...parts);
 }
+function warnNav(...parts){ console.warn("⚠️", ...parts); }
+function errNav(...parts){ console.error("⛔", ...parts); }
 
-/* ------------------ UTIL ------------------ */
-function log(...a) { console.log(...a); }
-function warn(...a) { console.warn(...a); }
-function err(...a) { console.error(...a); }
+function isHolidayMode() {
+  // modo navideño activo entre 1 Dic y 10 Ene (año actual/ siguiente)
+  const now = new Date();
+  const year = now.getFullYear();
+  const start = new Date(`${year}-12-01T00:00:00Z`);
+  const end = new Date(`${year + 1}-01-10T23:59:59Z`);
+  // si hoy está antes de start pero mes es enero -> aún podría caer en rango cuando actual sea enero of same year? 
+  // (lo manejamos tal cual: fechas en UTC)
+  return now >= start || now <= end;
+}
 
 function humanBackoff(attempt) {
   const jitter = Math.floor(Math.random() * 600);
@@ -50,124 +65,88 @@ function humanBackoff(attempt) {
 }
 
 function formatPair(raw) {
-  const clean = (raw || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!raw) return "";
+  const clean = String(raw).replace(/[^A-Za-z0-9]/g, "");
   return clean.match(/.{1,4}/g)?.join("-") || clean;
 }
 
-function ensureSessionDir(num) {
-  const d = path.join(SESSION_ROOT, num);
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  return d;
+function ensureSessionDir(number) {
+  const dir = path.join(SESSION_ROOT, String(number));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
-// Play sound helper: tries termux, afplay (mac), paplay (linux), play (sox), aplay; fallback bell
-function playSound(event = "connect") {
-  const files = {
-    connect: null, // user can set file paths or leave null for short beep
-    close: null
-  };
-  // minimal: try platform-specific players for a short tone
-  const tryCmds = [
-    // termux
-    ["termux-media-player", "play", "/system/media/audio/ui/Effect_Tick.ogg"], // may not exist
-    // Android generic intent open won't play easily, skip
-    // macOS
-    ["afplay", "/System/Library/Sounds/Glass.aiff"],
-    // linux
-    ["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"],
-    ["play", "-n synth 0.08 sin 880"], // sox
-    ["aplay", "/usr/share/sounds/alsa/Front_Center.wav"]
-  ];
-  // Try to run a command that exists
-  for (const cmd of tryCmds) {
-    try {
-      // if the command is composite string (like "play ..."), split
-      const c0 = cmd[0];
-      if (!c0) continue;
-      // check if executable exists in PATH
-      const which = child.spawnSync("which", [c0]);
-      if (which.status === 0) {
-        // spawn asynchronously
-        try {
-          if (cmd.length === 1) child.spawn(c0);
-          else child.spawn(c0, cmd.slice(1), { stdio: "ignore", detached: true }).unref();
-          return;
-        } catch (e) { /* continue to next */ }
-      }
-    } catch (e) { /* ignore */ }
-  }
-  // fallback: bell
-  process.stdout.write("\x07");
+// ------------------------- Sonido (intento general) -------------------------
+function playSound() {
+  // Simple beep para compatibilidad
+  try { process.stdout.write("\x07"); } catch {} // fallback
+  // Si prefieres intentar comandos externos, se puede extender aquí
 }
 
-/* ------------------ TMP DUMPER ------------------ */
+// ------------------------- TMP Dumper -------------------------
 let dumperInterval = null;
 function startDumper() {
   if (dumperInterval) return;
   dumperInterval = setInterval(() => {
-    const filename = `tokito-${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(path.join(TMP_ROOT, filename), `dump ${new Date().toISOString()}`);
-      // keep only last 100 files
-      const kids = fs.readdirSync(TMP_ROOT).sort();
-      if (kids.length > 150) {
-        const remove = kids.slice(0, kids.length - 150);
+      const fname = `tokito-${Date.now()}.tmp`;
+      fs.writeFileSync(path.join(TMP_ROOT, fname), `dump ${nowIso()}`);
+      // mantener solo últimos N archivos
+      const files = fs.readdirSync(TMP_ROOT).sort();
+      if (files.length > MAX_TMP_FILES) {
+        const remove = files.slice(0, files.length - MAX_TMP_FILES);
         remove.forEach(f => {
           try { fs.unlinkSync(path.join(TMP_ROOT, f)); } catch {}
         });
       }
     } catch (e) { /* ignore */ }
-  }, 5_000); // every 5s
+  }, DUMPER_INTERVAL_MS);
+  logNavideño("🗂️ Dumper iniciado (tokito-php).");
 }
 function stopDumper() {
   if (!dumperInterval) return;
   clearInterval(dumperInterval);
   dumperInterval = null;
+  logNavideño("🛑 Dumper detenido.");
 }
 
-/* ------------------ QR FILE OPEN ------------------ */
-function saveAndOpenQR(qr) {
+// ------------------------- QR Guardado y Apertura -------------------------
+async function saveAndOpenQR(qr) {
   try {
     if (!fs.existsSync(QR_SAVE_FOLDER)) fs.mkdirSync(QR_SAVE_FOLDER, { recursive: true });
     const out = path.join(QR_SAVE_FOLDER, "qr.png");
-    const buf = qrcodeLib.toBufferSync(qr, { width: 512 });
+    const buf = await qrcode.toBuffer(qr, { width: 500 });
     fs.writeFileSync(out, buf);
-    log("\n=======================");
-    log("        QR LISTO");
-    log("=======================\n");
-    log("✔ Guardado en:", out);
-    log("📱 Intentando abrir en dispositivo (si está disponible)...");
-    // Try to open automatically on Android (termux), Linux, mac
-    // Termux: termux-open
-    const tryOpen = () => {
-      const apps = [
-        ["termux-open", out],
-        ["xdg-open", out],
-        ["open", out], // mac
-        // android am (may fail if path not allowed) — use file://
-        ["am", "start", "-a", "android.intent.action.VIEW", "-d", `file://${out}`]
-      ];
-      for (const args of apps) {
-        try {
-          const c = args[0];
-          const which = child.spawnSync("which", [c]);
-          if (which.status === 0) {
-            child.spawn(c, args.slice(1), { stdio: "ignore", detached: true }).unref();
-            return true;
-          }
-        } catch (e) { /* ignore */ }
-      }
-      return false;
-    };
-    const opened = tryOpen();
-    if (!opened) log("⚠ No se pudo abrir automáticamente. Abre manualmente:", out);
+    logNavideño("📸 QR guardado en:", out, "— intenta abrirlo desde tu galería.");
+    // intentar abrir (termux / xdg-open / open)
+    const openCandidates = [
+      ["termux-open", out],
+      ["xdg-open", out],
+      ["open", out],
+      // android am (si se puede)
+      ["am", "start", "-a", "android.intent.action.VIEW", "-d", `file://${out}`]
+    ];
+    for (const cmd of openCandidates) {
+      try {
+        const c = cmd[0];
+        const which = child.spawnSync("which", [c]);
+        if (which.status === 0) {
+          child.spawn(c, cmd.slice(1), { detached: true, stdio: "ignore" }).unref();
+          logNavideño("🔎 Intentando abrir con:", c);
+          return out;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    logNavideño("⚠ No se pudo abrir automáticamente. Abre manualmente:", out);
+    return out;
   } catch (e) {
-    err("❌ Error al crear qr.png:", e?.message || e);
+    errNav("Error guardando QR:", e && (e.message || e));
+    throw e;
   }
 }
 
-/* ------------------ SOCKET / PAIRING FLOW ------------------ */
-async function createSocket(sessionDir, opts = {}) {
+// ------------------------- Socket + Factory -------------------------
+async function createSocket(sessionDir) {
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -185,26 +164,22 @@ async function createSocket(sessionDir, opts = {}) {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // base connection updates
   sock.ev.on("connection.update", (update) => {
     const { connection, qr, lastDisconnect } = update;
     if (qr) {
-      // small terminal QR for convenience
-      try { qrcodeTerm.generate(qr, { small: true }); } catch {}
+      // Compact QR in terminal (small)
+      try { qrcodeTerm.generate(qr, { small: true }); } catch (e) {}
     }
-
     if (connection === "open") {
-      log("✅ Bot conectado correctamente.");
-      playSound("connect"); // sonido al conectar
+      logNavideño("🎊 Conectado correctamente. 💫");
+      playSound();
     }
-
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
-      warn("❌ Conexión cerrada. code:", code);
-      playSound("close"); // sonido al cerrar
-      // if session logged out, remove session dir to allow fresh pairing
+      warnNav("🔌 Conexión cerrada. code:", code);
+      playSound();
       if (code === DisconnectReason.loggedOut) {
-        warn("→ Sesión cerrada desde el dispositivo. Eliminando carpeta de sesión:", sessionDir);
+        warnNav("→ Sesión cerrada desde el dispositivo. Se eliminará la carpeta de sesión:", sessionDir);
         try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (e) {}
       }
     }
@@ -213,84 +188,81 @@ async function createSocket(sessionDir, opts = {}) {
   return sock;
 }
 
-/* ------------------ PAIRING WITH RETRIES ------------------ */
-async function pairingFlow(phone, options = {}) {
-  const clean = phone.replace(/\D/g, "");
-  if (!clean) { err("Número inválido."); return; }
+// ------------------------- Pairing con reintentos -------------------------
+async function pairingFlow(phone) {
+  const clean = String(phone).replace(/\D/g, "");
+  if (!clean) {
+    errNav("Número inválido.");
+    return;
+  }
   const sessionDir = ensureSessionDir(clean);
   let attempt = 0;
-  let lastErr = null;
+  let lastError = null;
 
   while (attempt < MAX_PAIR_ATTEMPTS) {
     attempt++;
-    log(`\n🔁 Intento ${attempt}/${MAX_PAIR_ATTEMPTS} — preparando socket...`);
+    logNavideño(`🔁 Intento ${attempt}/${MAX_PAIR_ATTEMPTS} — preparando conexión...`);
     const sock = await createSocket(sessionDir);
-    // small wait for socket handshake
     await delay(500 + Math.random() * 600);
 
     try {
       const raw = await sock.requestPairingCode(clean);
       const pretty = formatPair(raw);
-      log("\n================================");
-      log("👉 CÓDIGO DE 8 DÍGITOS (pégalos en WhatsApp):");
-      log("   " + pretty);
-      log("================================\n");
+      logNavideño("🎁 CÓDIGO DE 8 DÍGITOS (pégalo en WhatsApp):", pretty);
 
-      // wait for accept (creds.update or connection.open)
-      const accepted = await new Promise((resolve) => {
+      // esperar aceptación
+      const accepted = await new Promise(resolve => {
         let done = false;
-        const timer = setTimeout(() => {
-          if (!done) { done = true; resolve(false); }
-        }, PAIR_WAIT_TIMEOUT);
+        const timer = setTimeout(() => { if (!done) { done = true; resolve(false); } }, PAIR_WAIT_TIMEOUT);
 
         const onCreds = () => { if (!done) { done = true; clearTimeout(timer); resolve(true); } };
         const onConn = ({ connection }) => { if (!done && connection === "open") { done = true; clearTimeout(timer); resolve(true); } };
+
         sock.ev.on("creds.update", onCreds);
         sock.ev.on("connection.update", onConn);
       });
 
       if (accepted) {
-        log("🎉 Pairing aceptado, sesión guardada en:", sessionDir);
-        // keep socket running
+        logNavideño("🎉 Pairing aceptado. Sesión guardada en:", sessionDir);
+        // no cerrar el socket, mantiene la conexión
         sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-          if (connection === "open") log("✅ Reconectado OK");
+          if (connection === "open") logNavideño("✅ Reconectado OK.");
           if (connection === "close") {
             const code = lastDisconnect?.error?.output?.statusCode;
-            log("❌ Conexión cerrada:", code);
-            playSound("close");
+            warnNav("❌ Conexión cerrada:", code);
             if (code === DisconnectReason.loggedOut) {
-              warn("→ Sesión cerrada desde dispositivo. Eliminando:", sessionDir);
-              try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+              warnNav("→ Sesión cerrada desde dispositivo. Eliminando:", sessionDir);
+              try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (e) {}
             } else {
-              log("🔄 Intentando reconectar...");
+              logNavideño("🔁 Intentando reconectar...");
               setTimeout(() => mainMenu().catch(console.error), 2000);
             }
           }
         });
-        playSound("connect");
+        playSound();
         return;
       } else {
-        lastErr = new Error("Pairing no aceptado (timeout)");
-        log("⚠ Pairing no aceptado en este intento. Cerrando socket...");
+        lastError = new Error("pairing timeout");
+        warnNav("⚠ Pairing no aceptado en este intento. Cerrando socket...");
       }
     } catch (e) {
-      lastErr = e;
-      warn("⚠ Error al solicitar pairing:", e?.message || e);
+      lastError = e;
+      warnNav("⚠ Error al solicitar pairing:", e && (e.message || e));
     } finally {
       try { sock.ws.close(); } catch {}
     }
 
     const waitMs = humanBackoff(attempt);
-    log(`⏳ Esperando ${Math.round(waitMs)}ms antes del siguiente intento...`);
+    logNavideño(`⏳ Esperando ${Math.round(waitMs)}ms antes del siguiente intento...`);
     await delay(waitMs);
   }
 
-  err("⛔ Se agotaron los intentos para pairing.");
-  if (lastErr) err("Último error:", lastErr.message || lastErr);
-  log("Sugerencias:\n - Prueba con otro teléfono limpio o emulador.\n - Espera 30-60 minutos si has intentado muchas veces.\n - Verifica que no haya apps dual/clonadas interfiriendo.");
+  errNav("⛔ Se agotaron los intentos de pairing.");
+  if (lastError) errNav("Último error:", lastError.message || lastError);
+  logNavideño("Sugerencias: prueba con otro teléfono limpio o emulador; espera 30-60 minutos si has intentado muchas veces.");
 }
 
-/* ------------------ SUB-BOTS ------------------ */
+// ------------------------- SubBots (básico) -------------------------
 function subbotsDir() {
   const d = path.join(__dirname, "bots", "subbots");
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -303,143 +275,143 @@ function listSubBots() {
 function createSubBot(id) {
   const d = path.join(subbotsDir(), id);
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  // create minimal session folder
   const session = path.join(d, "session");
   if (!fs.existsSync(session)) fs.mkdirSync(session, { recursive: true });
-  log("✔ SubBot creado:", id, "en", d);
+  logNavideño("✨ SubBot creado:", id);
 }
 function removeSubBot(id) {
   const d = path.join(subbotsDir(), id);
   if (fs.existsSync(d)) {
     fs.rmSync(d, { recursive: true, force: true });
-    log("✔ SubBot eliminado:", id);
-  } else warn("No existe subbot:", id);
+    logNavideño("🗑️ SubBot eliminado:", id);
+  } else warnNav("No existe subbot:", id);
 }
 
-/* ------------------ MAIN MENU ------------------ */
+// ------------------------- Menú Principal (Navideño C) -------------------------
 async function mainMenu() {
-  console.clear();
-  log("======================================");
-  log(" TOKITO-MD — Menu Principal");
-  log("======================================");
-  log("[1] Escanear Código QR (guardar png & abrir)");
-  log("[2] Código de 8 dígitos (Pairing)");
-  log("[3] SubBots (crear/iniciar/listar/eliminar)");
-  log("[4] Toggle TMP dumper (spammer de /tmp/tokito-php)");
-  log("[0] Apagar bot (salir)");
-  log("======================================");
-  const op = (await ask("Elige opción: ")).trim();
+  while (true) {
+    console.clear();
+    const title = isHolidayMode()
+      ? "❄️🎀 TOKITO-MD — Menú Navideño (CUTE) 🎄✨"
+      : "TOKITO-MD — Menú Principal";
+    console.log("======================================");
+    console.log(title);
+    console.log("======================================");
+    console.log("[1] Escanear Código QR (guardar png & abrir)");
+    console.log("[2] Código de 8 dígitos (Pairing)");
+    console.log("[3] SubBots (crear/iniciar/listar/eliminar)");
+    console.log("[4] Toggle TMP dumper (tokito-php)");
+    console.log("[0] Apagar bot (salir)");
+    console.log("======================================");
+    const op = (await ask("Elige opción: ")).trim();
 
-  if (op === "0") {
-    log("Apagando..."); process.exit(0);
-  }
-
-  if (op === "1") {
-    // QR mode, one default session
-    const sessionDir = path.join(SESSION_ROOT, "default");
-    if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-    const { version } = await fetchLatestBaileysVersion();
-    const connOptions = {
-      version,
-      printQRInTerminal: false,
-      browser: USER_AGENT,
-      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys) },
-      syncFullHistory: false,
-      markOnlineOnConnect: false
-    };
-    const sock = makeWASocket(connOptions);
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("connection.update", async (update) => {
-      const { qr, connection, lastDisconnect } = update;
-      if (qr) {
-        // save QR as png and attempt to open
-        saveAndOpenQR(qr);
-      }
-      if (connection === "open") {
-        log("✔ Conectado!");
-        playSound("connect");
-      }
-      if (connection === "close") {
-        const code = lastDisconnect?.error?.output?.statusCode;
-        log("❌ CERRADO. code:", code);
-        playSound("close");
-      }
-    });
-
-    // return to menu automatically after some time or keep running? We'll return user to menu while socket runs.
-    log("Socket iniciado en modo QR (se guarda qr.png cuando esté listo). Volviendo al menú...");
-    await delay(1200);
-    return mainMenu();
-  }
-
-  if (op === "2") {
-    const phone = (await ask("Número del bot (ej: 573001112233) — escribe 0 para cancelar: ")).trim();
-    if (phone === "0") { log("Cancelado"); return mainMenu(); }
-    await pairingFlow(phone);
-    log("Volviendo al menú...");
-    await delay(600);
-    return mainMenu();
-  }
-
-  if (op === "3") {
-    // SubBots menu
-    while (true) {
-      console.clear();
-      log("===== SUB-BOTS =====");
-      const list = listSubBots();
-      log("Existentes:", list.length ? list.join(", ") : "— ninguno —");
-      log("[1] Crear SubBot");
-      log("[2] Iniciar SubBot (no implementado auto-run, abre su carpeta)");
-      log("[3] Eliminar SubBot");
-      log("[4] Volver");
-      const sopt = (await ask("Elige: ")).trim();
-      if (sopt === "4") break;
-      if (sopt === "1") {
-        const id = (await ask("ID para SubBot (ej: sub1): ")).trim();
-        if (id) createSubBot(id);
-        await delay(400);
-      } else if (sopt === "2") {
-        const id = (await ask("ID a iniciar: ")).trim();
-        const d = path.join(subbotsDir(), id);
-        if (!fs.existsSync(d)) { warn("No existe:", id); await delay(600); continue; }
-        log("Abrir carpeta del subbot en el gestor de archivos (si on Android se intenta abrir).", d);
-        // try to open folder
-        try {
-          const which = child.spawnSync("which", ["termux-open"]);
-          if (which.status === 0) child.spawn("termux-open", [d], { detached: true }).unref();
-        } catch (e) {}
-        await delay(600);
-      } else if (sopt === "3") {
-        const id = (await ask("ID a eliminar: ")).trim();
-        if (id) removeSubBot(id);
-        await delay(400);
-      }
+    if (op === "0") {
+      logNavideño("👋 Apagando Tokito. ¡Feliz día! 🎁");
+      process.exit(0);
     }
-    return mainMenu();
-  }
 
-  if (op === "4") {
-    // Toggle dumper
-    if (dumperInterval) {
-      stopDumper();
-      log("Dumper detenido.");
-    } else {
-      startDumper();
-      log("Dumper iniciado. Escribiendo archivos en:", TMP_ROOT);
+    if (op === "1") {
+      // QR mode — default session "default"
+      const sessionDir = path.join(SESSION_ROOT, "default");
+      if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+      const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+      const { version } = await fetchLatestBaileysVersion();
+
+      const connOptions = {
+        version,
+        printQRInTerminal: false,
+        browser: USER_AGENT,
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys) },
+        syncFullHistory: false,
+        markOnlineOnConnect: false
+      };
+
+      const sock = makeWASocket(connOptions);
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        const { qr, connection, lastDisconnect } = update;
+        if (qr) {
+          try {
+            const out = await saveAndOpenQR(qr);
+            logNavideño("📌 QR guardado y mostrado:", out);
+          } catch (e) { errNav("❌ Error al guardar/abrir QR:", e && (e.message || e)); }
+        }
+        if (connection === "open") {
+          logNavideño("🎉 Conectado via QR.");
+          playSound();
+        }
+        if (connection === "close") {
+          const code = lastDisconnect?.error?.output?.statusCode;
+          warnNav("🔌 Conexión cerrada. code:", code);
+        }
+      });
+
+      logNavideño("🔎 Socket iniciado en modo QR — se guardará qr.png en tu galería cuando esté listo.");
+      await delay(1200);
+      continue;
     }
-    await delay(600);
-    return mainMenu();
-  }
 
-  log("Opción inválida.");
-  await delay(600);
-  return mainMenu();
+    if (op === "2") {
+      const phone = (await ask("Número del bot (ej: 573001112233) — escribe 0 para cancelar: ")).trim();
+      if (phone === "0") { logNavideño("Cancelado."); await delay(600); continue; }
+      await pairingFlow(phone);
+      await delay(600);
+      continue;
+    }
+
+    if (op === "3") {
+      while (true) {
+        console.clear();
+        logNavideño("✨ SUB-BOTS ✨");
+        const bots = listSubBots();
+        console.log("Existentes:", bots.length ? bots.join(", ") : "— ninguno —");
+        console.log("[1] Crear SubBot");
+        console.log("[2] Iniciar SubBot (abrir carpeta)");
+        console.log("[3] Eliminar SubBot");
+        console.log("[4] Volver");
+        const sopt = (await ask("Elige: ")).trim();
+        if (sopt === "4") break;
+        if (sopt === "1") {
+          const id = (await ask("ID para SubBot (ej: sub1): ")).trim();
+          if (id) createSubBot(id);
+          await delay(400);
+        } else if (sopt === "2") {
+          const id = (await ask("ID a iniciar: ")).trim();
+          const d = path.join(subbotsDir(), id);
+          if (!fs.existsSync(d)) { warnNav("No existe:", id); await delay(600); continue; }
+          logNavideño("📂 Abriendo carpeta del subbot (si procede):", d);
+          try {
+            const which = child.spawnSync("which", ["termux-open"]);
+            if (which.status === 0) child.spawn("termux-open", [d], { detached: true }).unref();
+          } catch (e) {}
+          await delay(600);
+        } else if (sopt === "3") {
+          const id = (await ask("ID a eliminar: ")).trim();
+          if (id) removeSubBot(id);
+          await delay(400);
+        } else { warnNav("Opción inválida."); await delay(300); }
+      }
+      continue;
+    }
+
+    if (op === "4") {
+      if (dumperInterval) {
+        stopDumper();
+      } else {
+        startDumper();
+      }
+      await delay(600);
+      continue;
+    }
+
+    warnNav("Opción inválida.");
+    await delay(400);
+  }
 }
 
-/* ------------------ START ------------------ */
+// ------------------------- Start -------------------------
 mainMenu().catch(e => {
-  err("Error crítico:", e && (e.stack || e));
+  errNav("Error crítico:", e && (e.stack || e));
   process.exit(1);
 });
