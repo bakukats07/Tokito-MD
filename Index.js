@@ -11,9 +11,11 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const qrcode = require("qrcode-terminal");
+const QRImage = require("qrcode");   // <- AGREGADO (opción 3)
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const { exec } = require("child_process");
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -72,7 +74,18 @@ async function startQRMode() {
     if (qr) {
       console.clear();
       console.log("=========== QR PARA ESCANEAR ===========");
+
+      // Mostrar QR compacto en consola
       qrcode.generate(qr, { small: true });
+
+      // -------- Opción 3: generar qr.png --------
+      QRImage.toFile("./qr.png", qr, {}, (err) => {
+        if (!err) console.log("🖼  QR guardado como qr.png");
+      });
+
+      // Abrir archivo automáticamente en Termux (si existe termux-open)
+      try { exec("termux-open qr.png"); } catch {}
+
       console.log("========================================");
     }
 
