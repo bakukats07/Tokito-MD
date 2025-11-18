@@ -3,6 +3,7 @@ const {
     useMultiFileAuthState,
     fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
+
 const qrcode = require("qrcode");
 const fs = require("fs");
 
@@ -36,7 +37,7 @@ process.stdin.once("data", async (data) => {
     // SOCKET
     const conn = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // NO imprimir
+        printQRInTerminal: false, // NO imprimir en consola
         browser: ["Safari", "Android", "13"],
         version
     });
@@ -45,28 +46,29 @@ process.stdin.once("data", async (data) => {
     conn.ev.on("connection.update", async (update) => {
         const { qr, connection } = update;
 
-        // MODO QR
+        // === MODO QR ===
         if (qr && option === "1") {
             try {
-                const img = await qrcode.toBuffer(q, { width: 256 });
+                const img = await qrcode.toBuffer(qr, { width: 256 });
+
                 fs.writeFileSync("qr.png", img);
 
                 console.log("\n=======================");
                 console.log("        QR LISTO");
                 console.log("=======================\n");
                 console.log("✔ Guardado en: qr.png");
-                console.log("📱 Ábrelo en galería y escanéalo.");
+                console.log("📱 Ábrelo desde tu galería y escanéalo.");
             } catch (err) {
                 console.log("❌ Error al crear qr.png:", err);
             }
         }
 
-        // MODO PAIRING (código 8 dígitos)
+        // === MODO PAIRING ===
         if (connection === "connecting" && option === "2") {
-            console.log("🔢 Esperando el código en tu WhatsApp...");
+            console.log("🔢 Esperando el código de 8 dígitos...");
         }
 
-        // YA CONECTÓ
+        // YA CONECTADO
         if (connection === "open") {
             console.log("✔ Conectado a WhatsApp!");
         }
