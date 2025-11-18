@@ -9,7 +9,7 @@ const {
   DisconnectReason
 } = require("@whiskeysockets/baileys");
 
-const QRCode = require("qrcode"); // <-- NUEVO: QR ultra small
+const QRCode = require("qrcode"); // QR ultra small
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -49,7 +49,9 @@ function ensureSessionDir(number) {
   return dir;
 }
 
-// -------- QR MODE --------
+// ───────────────────────────────────────────
+//           MODO QR — ULTRA SMALL REAL
+// ───────────────────────────────────────────
 async function startQRMode() {
   const sessionDir = path.join(SESSION_ROOT, "default");
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -66,7 +68,7 @@ async function startQRMode() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", ({ qr, connection, lastDisconnect }) => {
+  sock.ev.on("connection.update", async ({ qr, connection, lastDisconnect }) => {
 
     if (qr) {
       console.clear();
@@ -74,12 +76,18 @@ async function startQRMode() {
       console.log("        QR PARA ESCANEAR");
       console.log("==================================");
 
-      // QR ULTRA SMALL — versión compacta real
-      QRCode.toString(qr, {
-        type: "terminal",
-        small: true
-      }, (err, tiny) => {
-        if (!err) console.log(tiny);
+      // QR ULTRA SMALL + recorte + compresión
+      QRCode.toString(qr, { type: "terminal", small: true }, (err, tiny) => {
+        if (err) return console.log("❌ Error generando QR:", err);
+
+        const optimized = tiny
+          .split("\n")
+          .map(l => l.replace(/\s+$/g, ""))      // quitar espacios a la derecha
+          .filter(l => l.trim() !== "")         // eliminar líneas vacías
+          .map(l => l.replace(/██/g, "█"))      // compactar bloques dobles
+          .join("\n");
+
+        console.log(optimized);
       });
 
       console.log("==================================");
@@ -94,6 +102,7 @@ async function startQRMode() {
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log("❌ Conexión cerrada:", code);
+
       if (code !== DisconnectReason.loggedOut) {
         console.log("🔄 Reintentando en 2s...");
         setTimeout(() => startQRMode(), 2000);
@@ -102,7 +111,9 @@ async function startQRMode() {
   });
 }
 
-// -------- PAIRING MODE --------
+// ───────────────────────────────────────────
+//           MODO PAIRING — 8 DÍGITOS
+// ───────────────────────────────────────────
 async function startPairing(number) {
   const clean = number.replace(/\D/g, "");
   const sessionDir = ensureSessionDir(clean);
@@ -195,7 +206,9 @@ async function startPairing(number) {
   console.log("⛔ Se agotaron los intentos. Cooldown recomendado: 30–60 min.");
 }
 
-// -------- MENÚ --------
+// ───────────────────────────────────────────
+//                     MENÚ
+// ───────────────────────────────────────────
 (async () => {
   console.clear();
   console.log("======================================");
